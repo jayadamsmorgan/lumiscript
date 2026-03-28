@@ -1,0 +1,5 @@
+type animation
+
+render {
+    color hsv(missing, 100, 100)
+}

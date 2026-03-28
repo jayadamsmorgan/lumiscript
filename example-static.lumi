@@ -1,0 +1,5 @@
+type static
+
+render {
+    color rgb(150, 200, 255)
+}

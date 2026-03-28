@@ -1,0 +1,16 @@
+type animation
+global var counter = 0
+key var flash = 0
+
+update {
+    counter = counter + dt
+}
+
+render {
+    if pressed {
+        flash = 100
+    } else {
+        flash = clamp(flash - dt * 0.5, 0, 100)
+    }
+    color rgb(counter, flash * 2.55, 0)
+}

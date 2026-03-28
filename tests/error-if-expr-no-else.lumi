@@ -1,0 +1,5 @@
+type animation
+
+render {
+    color if pressed { rgb(255, 255, 255) }
+}

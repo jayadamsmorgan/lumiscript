@@ -1,0 +1,3 @@
+init
+render 0 0 0 16 1 0 0
+render 1 0 0 16 1 1 100

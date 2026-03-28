@@ -1,0 +1,5 @@
+# Meson
+build/
+
+# Clangd
+.cache/

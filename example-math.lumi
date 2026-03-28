@@ -1,0 +1,16 @@
+type animation
+global var phase = 0
+
+update {
+    phase = phase + dt * speed
+}
+
+render {
+    let wave = sin(phase * 0.01)
+    let pulse = lerp(20, 100, (wave + 1) * 0.5)
+    color rgb(
+        clamp(sqrt(x * x + y * y) * 4, 0, 255),
+        clamp(pulse, 0, 255),
+        clamp((cos(phase * 0.02) + 1) * 127.5, 0, 255)
+    )
+}

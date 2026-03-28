@@ -1,0 +1,18 @@
+type animation
+global var phase = 0
+
+update {
+    phase = phase + dt * 0.05
+}
+
+render {
+    let cx = 50
+    let cy = 50
+    let d = dist(x, y, cx, cy)
+
+    color hsv(
+        if pressed { 0 } else { (phase + d * 2) % 360 },
+        100,
+        if d < 20 { 100 } else { clamp(120 - d * 2, 10, 100) }
+    )
+}

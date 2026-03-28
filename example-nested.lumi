@@ -1,0 +1,25 @@
+type animation
+global var phase = 0
+key var pulse = 0
+
+update {
+    phase = (phase + dt * speed * 0.08) % 360
+}
+
+render {
+    if pressed {
+        pulse = 100
+    } else {
+        pulse = clamp(pulse - dt * 0.3 * speed, 0, 100)
+    }
+
+    color if pulse > 0 {
+        rgb(255, pulse * 2.55, pulse * 1.2)
+    } else {
+        if x < 50 {
+            hsv((phase + y * 3.6) % 360, 80, 35)
+        } else {
+            hsv((phase + x * 3.6) % 360, 80, 35)
+        }
+    }
+}

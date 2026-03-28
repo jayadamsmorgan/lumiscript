@@ -1,0 +1,7 @@
+type animation
+
+render {
+    let base = 10
+    base = 20
+    color rgb(base, base, base)
+}

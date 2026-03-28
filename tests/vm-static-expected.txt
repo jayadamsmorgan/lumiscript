@@ -1,0 +1,3 @@
+init steps=1
+render key=0 color=0x96C8FF steps=6
+render key=1 color=0x96C8FF steps=6

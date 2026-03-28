@@ -1,0 +1,3 @@
+init steps=1
+render key=0 color=0x040506 steps=8
+render key=1 color=0x010203 steps=9

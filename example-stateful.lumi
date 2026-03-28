@@ -1,0 +1,21 @@
+type animation
+global var phase = 0
+key var glow = 0
+
+init {
+    phase = 30
+}
+
+update {
+    phase = (phase + dt * speed * 0.12) % 360
+}
+
+render {
+    if pressed {
+        glow = 100
+    } else {
+        glow = clamp(glow - dt * 0.3, 0, 100)
+    }
+
+    color hsv(phase, 100, glow)
+}

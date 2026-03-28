@@ -1,0 +1,12 @@
+type animation
+global var phase = 0
+
+update {
+    phase = phase + dt * 0.02 * speed
+}
+
+render {
+    let d = dist(x, y, 50, 50)
+    color hsv((x * 3.6 + phase) % 360, 100,
+        clamp(100 - abs(d - phase * 0.5) * 8, 0, 100))
+}

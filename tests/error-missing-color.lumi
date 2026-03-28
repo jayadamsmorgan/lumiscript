@@ -1,0 +1,10 @@
+type animation
+global var phase = 0
+
+update {
+    phase = phase + dt
+}
+
+render {
+    let x2 = phase
+}
