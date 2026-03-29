@@ -1,0 +1,13 @@
+config LUMISCRIPT
+    bool "Enable Lumiscript module"
+
+if LUMISCRIPT
+
+    config LUMISCRIPT_COMPILER
+        bool "Enable Lumiscript compiler support"
+
+    config LUMISCRIPT_VM
+        bool "Enable Lumiscript VM"
+        default y
+
+endif #LUMISCRIPT
