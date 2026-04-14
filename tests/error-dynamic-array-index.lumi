@@ -1,0 +1,7 @@
+type animation
+
+global var slot[2] = 0
+
+render {
+    color rgb(slot[x], 0, 0)
+}

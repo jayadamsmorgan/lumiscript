@@ -15,7 +15,10 @@ typedef enum lumi_token_type {
     TOKEN_RPAREN,
     TOKEN_LBRACE,
     TOKEN_RBRACE,
+    TOKEN_LBRACKET,
+    TOKEN_RBRACKET,
     TOKEN_COMMA,
+    TOKEN_DOT_DOT,
     TOKEN_ASSIGN,
     TOKEN_PLUS,
     TOKEN_MINUS,
@@ -39,6 +42,8 @@ typedef enum lumi_token_type {
     TOKEN_KEYWORD_ELSE,
     TOKEN_KEYWORD_GLOBAL,
     TOKEN_KEYWORD_KEY,
+    TOKEN_KEYWORD_FOR,
+    TOKEN_KEYWORD_IN,
     TOKEN_KEYWORD_INIT,
     TOKEN_KEYWORD_UPDATE,
     TOKEN_KEYWORD_RENDER,
@@ -67,6 +72,7 @@ lumi_token lumi_lexer_next(lumi_lexer *lexer);
 typedef enum lumi_expr_kind {
     EXPR_NUMBER = 0,
     EXPR_SYMBOL,
+    EXPR_INDEX,
     EXPR_UNARY,
     EXPR_BINARY,
     EXPR_CALL,
@@ -85,6 +91,10 @@ struct lumi_expr {
         struct {
             char *name;
         } symbol;
+        struct {
+            char *name;
+            lumi_expr *index;
+        } index;
         struct {
             lumi_token_type op;
             lumi_expr *operand;
@@ -118,6 +128,7 @@ typedef enum lumi_stmt_kind {
     STMT_ASSIGN,
     STMT_COLOR,
     STMT_IF,
+    STMT_FOR,
 } lumi_stmt_kind;
 
 struct lumi_stmt {
@@ -132,6 +143,7 @@ struct lumi_stmt {
         struct {
             char *name;
             lumi_expr *value;
+            lumi_expr *index;
         } assign;
         struct {
             lumi_expr *value;
@@ -141,6 +153,12 @@ struct lumi_stmt {
             lumi_stmt_list then_branch;
             lumi_stmt_list else_branch;
         } if_stmt;
+        struct {
+            char *name;
+            lumi_expr *start;
+            lumi_expr *end;
+            lumi_stmt_list body;
+        } for_stmt;
     } as;
 };
 
@@ -152,6 +170,7 @@ typedef enum lumi_var_storage_kind {
 typedef struct lumi_var_decl {
     char *name;
     lumi_var_storage_kind storage;
+    size_t array_size;
     lumi_expr *initializer;
 } lumi_var_decl;
 

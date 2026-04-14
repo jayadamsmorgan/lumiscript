@@ -42,6 +42,12 @@ static lumi_token_type keyword_type(const char *start, size_t length) {
     if (length == 3 && strncmp(start, "key", 3) == 0) {
         return TOKEN_KEYWORD_KEY;
     }
+    if (length == 2 && strncmp(start, "in", 2) == 0) {
+        return TOKEN_KEYWORD_IN;
+    }
+    if (length == 3 && strncmp(start, "for", 3) == 0) {
+        return TOKEN_KEYWORD_FOR;
+    }
     if (length == 4 && strncmp(start, "init", 4) == 0) {
         return TOKEN_KEYWORD_INIT;
     }
@@ -107,7 +113,8 @@ lumi_token lumi_lexer_next(lumi_lexer *lexer) {
     if (isdigit((unsigned char)c) || (c == '.' && isdigit((unsigned char)*lexer->cursor))) {
         char *end_ptr;
         lumi_token token;
-        while (isdigit((unsigned char)*lexer->cursor) || *lexer->cursor == '.') {
+        while (isdigit((unsigned char)*lexer->cursor)
+            || (*lexer->cursor == '.' && lexer->cursor[1] != '.')) {
             lexer->cursor++;
             lexer->column++;
         }
@@ -125,8 +132,19 @@ lumi_token lumi_lexer_next(lumi_lexer *lexer) {
             return make_token(lexer, TOKEN_LBRACE, start, 1);
         case '}':
             return make_token(lexer, TOKEN_RBRACE, start, 1);
+        case '[':
+            return make_token(lexer, TOKEN_LBRACKET, start, 1);
+        case ']':
+            return make_token(lexer, TOKEN_RBRACKET, start, 1);
         case ',':
             return make_token(lexer, TOKEN_COMMA, start, 1);
+        case '.':
+            if (*lexer->cursor == '.') {
+                lexer->cursor++;
+                lexer->column++;
+                return make_token(lexer, TOKEN_DOT_DOT, start, 2);
+            }
+            break;
         case '+':
             return make_token(lexer, TOKEN_PLUS, start, 1);
         case '-':

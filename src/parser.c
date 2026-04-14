@@ -41,6 +41,7 @@ typedef struct symbol {
     char *name;
     symbol_kind kind;
     size_t index;
+    size_t array_size;
     int is_const;
     const_value value;
     const lumi_expr *expr;
@@ -229,6 +230,8 @@ static void skip_newlines(parser *p) {
 }
 
 static lumi_expr *parse_expression(parser *p);
+static void free_expr(lumi_expr *expr);
+static void free_stmt(lumi_stmt *stmt);
 
 static lumi_expr *parse_if_expression(parser *p) {
     lumi_expr *expr;
@@ -344,6 +347,28 @@ static lumi_expr *parse_primary(parser *p) {
             expr->as.call.name = name;
             expr->as.call.args = args;
             expr->as.call.arg_count = arg_count;
+            return expr;
+        }
+        if (match(p, TOKEN_LBRACKET)) {
+            lumi_expr *index_expr;
+            index_expr = parse_expression(p);
+            if (index_expr == NULL) {
+                free(name);
+                return NULL;
+            }
+            if (!expect(p, TOKEN_RBRACKET, "expected ']' after index expression")) {
+                free(name);
+                free_expr(index_expr);
+                return NULL;
+            }
+            expr = new_expr(EXPR_INDEX, token.line, token.column);
+            if (expr == NULL) {
+                free(name);
+                free_expr(index_expr);
+                return NULL;
+            }
+            expr->as.index.name = name;
+            expr->as.index.index = index_expr;
             return expr;
         }
         expr = new_expr(EXPR_SYMBOL, token.line, token.column);
@@ -583,18 +608,37 @@ static lumi_stmt *parse_statement(parser *p) {
         return stmt;
     }
 
-    if (p->current.type == TOKEN_IDENTIFIER && peek_type(p) == TOKEN_ASSIGN) {
+    if (p->current.type == TOKEN_IDENTIFIER
+        && (peek_type(p) == TOKEN_ASSIGN || peek_type(p) == TOKEN_LBRACKET)) {
+        lumi_expr *index_expr = NULL;
         name = p->current;
         advance(p);
-        advance(p);
+        if (match(p, TOKEN_LBRACKET)) {
+            index_expr = parse_expression(p);
+            if (index_expr == NULL) {
+                return NULL;
+            }
+            if (!expect(p, TOKEN_RBRACKET, "expected ']' after index expression")) {
+                free_expr(index_expr);
+                return NULL;
+            }
+        }
+        if (!expect(p, TOKEN_ASSIGN, "expected '=' after assignment target")) {
+            free_expr(index_expr);
+            return NULL;
+        }
         value = parse_expression(p);
         if (value == NULL) {
+            free_expr(index_expr);
             return NULL;
         }
         stmt = new_stmt(STMT_ASSIGN, name.line, name.column);
         if (stmt != NULL) {
             stmt->as.assign.name = copy_string(name.start, name.length);
             stmt->as.assign.value = value;
+            stmt->as.assign.index = index_expr;
+        } else {
+            free_expr(index_expr);
         }
         return stmt;
     }
@@ -643,6 +687,53 @@ static lumi_stmt *parse_statement(parser *p) {
         return stmt;
     }
 
+    if (match(p, TOKEN_KEYWORD_FOR)) {
+        lumi_expr *start_expr;
+        lumi_expr *end_expr;
+        lumi_stmt_list body = {0};
+        lumi_token token = p->previous;
+        if (p->current.type != TOKEN_IDENTIFIER) {
+            set_parse_error(p, p->current.line, p->current.column, "expected loop variable name");
+            return NULL;
+        }
+        name = p->current;
+        advance(p);
+        if (!expect(p, TOKEN_KEYWORD_IN, "expected 'in' after loop variable")) {
+            return NULL;
+        }
+        start_expr = parse_expression(p);
+        if (start_expr == NULL) {
+            return NULL;
+        }
+        if (!expect(p, TOKEN_DOT_DOT, "expected '..' in for range")) {
+            free_expr(start_expr);
+            return NULL;
+        }
+        end_expr = parse_expression(p);
+        if (end_expr == NULL) {
+            free_expr(start_expr);
+            return NULL;
+        }
+        if (!expect(p, TOKEN_LBRACE, "expected '{' after for range")) {
+            free_expr(start_expr);
+            free_expr(end_expr);
+            return NULL;
+        }
+        if (!parse_block(p, &body)) {
+            free_expr(start_expr);
+            free_expr(end_expr);
+            return NULL;
+        }
+        stmt = new_stmt(STMT_FOR, token.line, token.column);
+        if (stmt != NULL) {
+            stmt->as.for_stmt.name = copy_string(name.start, name.length);
+            stmt->as.for_stmt.start = start_expr;
+            stmt->as.for_stmt.end = end_expr;
+            stmt->as.for_stmt.body = body;
+        }
+        return stmt;
+    }
+
     if (p->current.type == TOKEN_INVALID) {
         set_parse_error(p, p->current.line, p->current.column, "invalid character '%.*s'", (int)p->current.length, p->current.start);
         return NULL;
@@ -665,7 +756,26 @@ static int parse_var_decl(parser *p, lumi_program *program, lumi_var_storage_kin
     memset(&decl, 0, sizeof(decl));
     decl.name = copy_string(p->current.start, p->current.length);
     decl.storage = storage;
+    decl.array_size = 1;
     advance(p);
+    if (match(p, TOKEN_LBRACKET)) {
+        if (p->current.type != TOKEN_NUMBER) {
+            set_parse_error(p, p->current.line, p->current.column, "expected array size");
+            free(decl.name);
+            return 0;
+        }
+        if (p->current.number < 1 || p->current.number != (double)(size_t)p->current.number) {
+            set_parse_error(p, p->current.line, p->current.column, "array size must be a positive integer");
+            free(decl.name);
+            return 0;
+        }
+        decl.array_size = (size_t)p->current.number;
+        advance(p);
+        if (!expect(p, TOKEN_RBRACKET, "expected ']' after array size")) {
+            free(decl.name);
+            return 0;
+        }
+    }
     if (!expect(p, TOKEN_ASSIGN, "expected '=' after variable name")) {
         free(decl.name);
         return 0;
@@ -702,6 +812,10 @@ static void free_expr(lumi_expr *expr) {
     switch (expr->kind) {
         case EXPR_SYMBOL:
             free(expr->as.symbol.name);
+            break;
+        case EXPR_INDEX:
+            free(expr->as.index.name);
+            free_expr(expr->as.index.index);
             break;
         case EXPR_UNARY:
             free_expr(expr->as.unary.operand);
@@ -740,6 +854,7 @@ static void free_stmt(lumi_stmt *stmt) {
             break;
         case STMT_ASSIGN:
             free(stmt->as.assign.name);
+            free_expr(stmt->as.assign.index);
             free_expr(stmt->as.assign.value);
             break;
         case STMT_COLOR:
@@ -755,6 +870,15 @@ static void free_stmt(lumi_stmt *stmt) {
             }
             free(stmt->as.if_stmt.then_branch.items);
             free(stmt->as.if_stmt.else_branch.items);
+            break;
+        case STMT_FOR:
+            free(stmt->as.for_stmt.name);
+            free_expr(stmt->as.for_stmt.start);
+            free_expr(stmt->as.for_stmt.end);
+            for (i = 0; i < stmt->as.for_stmt.body.count; ++i) {
+                free_stmt(stmt->as.for_stmt.body.items[i]);
+            }
+            free(stmt->as.for_stmt.body.items);
             break;
     }
     free(stmt);
@@ -937,7 +1061,7 @@ static int emit_op(emitter *e, uint8_t opcode, int delta, size_t line, size_t co
     return adjust_stack(e, delta, line, column);
 }
 
-static int declare_symbol(emitter *e, const char *name, symbol_kind kind, size_t index,
+static int declare_symbol(emitter *e, const char *name, symbol_kind kind, size_t index, size_t array_size,
     int is_const, const_value value, const lumi_expr *expr, size_t line, size_t column) {
     symbol sym;
     if (find_symbol(&e->symbols, name) != NULL && kind != SYMBOL_LET) {
@@ -954,6 +1078,7 @@ static int declare_symbol(emitter *e, const char *name, symbol_kind kind, size_t
     }
     sym.kind = kind;
     sym.index = index;
+    sym.array_size = array_size;
     sym.is_const = is_const;
     sym.value = value;
     sym.expr = expr;
@@ -969,6 +1094,7 @@ static int add_input(emitter *e, const char *name, size_t slot) {
     }
     sym.kind = SYMBOL_INPUT;
     sym.index = slot;
+    sym.array_size = 1;
     sym.is_const = 0;
     sym.value.kind = CONST_UNKNOWN;
     sym.expr = NULL;
@@ -988,6 +1114,54 @@ static int section_allows_input(section_kind section, size_t slot) {
 }
 
 static const_value eval_expr(emitter *e, const lumi_expr *expr);
+
+static int float_to_index(float value, size_t *out_index) {
+    size_t index = (size_t)value;
+    if (value < 0.0f || value != (float)index) {
+        return 0;
+    }
+    *out_index = index;
+    return 1;
+}
+
+static int resolve_symbol_slot(emitter *e, const char *name, const lumi_expr *index_expr,
+    symbol **out_symbol, size_t *out_slot, size_t line, size_t column) {
+    symbol *sym = find_symbol(&e->symbols, name);
+    const_value index_value;
+    size_t index;
+
+    if (sym == NULL) {
+        set_emit_error(e, line, column, "unknown symbol '%s'", name);
+        return 0;
+    }
+    if (index_expr == NULL) {
+        if (sym->array_size != 1) {
+            set_emit_error(e, line, column, "array '%s' requires an index", name);
+            return 0;
+        }
+        *out_symbol = sym;
+        *out_slot = sym->index;
+        return 1;
+    }
+    if (sym->array_size == 1) {
+        set_emit_error(e, line, column, "symbol '%s' is not an array", name);
+        return 0;
+    }
+    index_value = eval_expr(e, index_expr);
+    if (index_value.kind != CONST_FLOAT || !float_to_index(index_value.number, &index)) {
+        set_emit_error(e, index_expr->line, index_expr->column,
+            "array index for '%s' must be compile-time integer", name);
+        return 0;
+    }
+    if (index >= sym->array_size) {
+        set_emit_error(e, index_expr->line, index_expr->column,
+            "array index %zu out of bounds for '%s[%zu]'", index, name, sym->array_size);
+        return 0;
+    }
+    *out_symbol = sym;
+    *out_slot = sym->index + index;
+    return 1;
+}
 
 static const_value eval_binary(lumi_token_type op, const_value left, const_value right) {
     const_value out = {CONST_UNKNOWN, 0.0f};
@@ -1086,10 +1260,20 @@ static const_value eval_expr(emitter *e, const lumi_expr *expr) {
             return out;
         case EXPR_SYMBOL:
             sym = find_symbol(&e->symbols, expr->as.symbol.name);
-            if (sym != NULL && sym->kind == SYMBOL_LET && sym->is_const) {
+            if (sym != NULL && sym->array_size == 1 && sym->kind == SYMBOL_LET && sym->is_const) {
                 return sym->value;
             }
             return out;
+        case EXPR_INDEX: {
+            size_t slot;
+            if (!resolve_symbol_slot(e, expr->as.index.name, expr->as.index.index, &sym, &slot, expr->line, expr->column)) {
+                return out;
+            }
+            if (sym->kind == SYMBOL_LET && sym->is_const) {
+                return sym->value;
+            }
+            return out;
+        }
         case EXPR_UNARY: {
             const_value inner = eval_expr(e, expr->as.unary.operand);
             if (inner.kind != CONST_FLOAT) {
@@ -1257,6 +1441,7 @@ static int emit_if_expr(emitter *e, const lumi_expr *expr) {
 static int emit_expr(emitter *e, const lumi_expr *expr) {
     symbol *sym;
     uint16_t index;
+    size_t slot;
 
     switch (expr->kind) {
         case EXPR_NUMBER:
@@ -1265,9 +1450,7 @@ static int emit_expr(emitter *e, const lumi_expr *expr) {
             }
             return emit_op(e, LUMI_OP_PUSH_CONST_F32, 1, expr->line, expr->column) && emit_u16(e->code, index);
         case EXPR_SYMBOL:
-            sym = find_symbol(&e->symbols, expr->as.symbol.name);
-            if (sym == NULL) {
-                set_emit_error(e, expr->line, expr->column, "unknown symbol '%s'", expr->as.symbol.name);
+            if (!resolve_symbol_slot(e, expr->as.symbol.name, NULL, &sym, &slot, expr->line, expr->column)) {
                 return 0;
             }
             if (sym->kind == SYMBOL_INPUT) {
@@ -1292,7 +1475,30 @@ static int emit_expr(emitter *e, const lumi_expr *expr) {
                 return emit_const_or_runtime(e, sym->expr);
             }
             return emit_op(e, sym->kind == SYMBOL_GLOBAL_VAR ? LUMI_OP_LOAD_GLOBAL : LUMI_OP_LOAD_KEY, 1, expr->line, expr->column)
-                && emit_u16(e->code, (uint16_t)sym->index);
+                && emit_u16(e->code, (uint16_t)slot);
+        case EXPR_INDEX:
+            if (!resolve_symbol_slot(e, expr->as.index.name, expr->as.index.index, &sym, &slot, expr->line, expr->column)) {
+                return 0;
+            }
+            if (sym->kind == SYMBOL_INPUT) {
+                set_emit_error(e, expr->line, expr->column, "inputs cannot be indexed");
+                return 0;
+            }
+            if (sym->kind == SYMBOL_KEY_VAR && e->current_section != SECTION_RENDER) {
+                set_emit_error(e, expr->line, expr->column, "key variable '%s' is only available in render", expr->as.index.name);
+                return 0;
+            }
+            if (sym->kind == SYMBOL_LET && sym->is_const) {
+                if (!add_constant(e, sym->value.number, &index)) {
+                    return 0;
+                }
+                return emit_op(e, LUMI_OP_PUSH_CONST_F32, 1, expr->line, expr->column) && emit_u16(e->code, index);
+            }
+            if (sym->kind == SYMBOL_LET && sym->expr != NULL) {
+                return emit_const_or_runtime(e, sym->expr);
+            }
+            return emit_op(e, sym->kind == SYMBOL_GLOBAL_VAR ? LUMI_OP_LOAD_GLOBAL : LUMI_OP_LOAD_KEY, 1, expr->line, expr->column)
+                && emit_u16(e->code, (uint16_t)slot);
         case EXPR_UNARY:
             if (!emit_const_or_runtime(e, expr->as.unary.operand)) {
                 return 0;
@@ -1343,6 +1549,7 @@ static int stmt_guarantees_color(const lumi_stmt *stmt) {
                 && stmt_list_guarantees_color(&stmt->as.if_stmt.else_branch);
         case STMT_LET:
         case STMT_ASSIGN:
+        case STMT_FOR:
             return 0;
     }
     return 0;
@@ -1412,9 +1619,9 @@ static int emit_if_stmt(emitter *e, const lumi_stmt *stmt) {
 }
 
 static int emit_assignment(emitter *e, const lumi_stmt *stmt) {
-    symbol *sym = find_symbol(&e->symbols, stmt->as.assign.name);
-    if (sym == NULL) {
-        set_emit_error(e, stmt->line, stmt->column, "unknown symbol '%s'", stmt->as.assign.name);
+    symbol *sym;
+    size_t slot;
+    if (!resolve_symbol_slot(e, stmt->as.assign.name, stmt->as.assign.index, &sym, &slot, stmt->line, stmt->column)) {
         return 0;
     }
     if (sym->kind != SYMBOL_GLOBAL_VAR && sym->kind != SYMBOL_KEY_VAR) {
@@ -1429,7 +1636,39 @@ static int emit_assignment(emitter *e, const lumi_stmt *stmt) {
         return 0;
     }
     return emit_op(e, sym->kind == SYMBOL_GLOBAL_VAR ? LUMI_OP_STORE_GLOBAL : LUMI_OP_STORE_KEY, -1, stmt->line, stmt->column)
-        && emit_u16(e->code, (uint16_t)sym->index);
+        && emit_u16(e->code, (uint16_t)slot);
+}
+
+static int emit_for_stmt(emitter *e, const lumi_stmt *stmt) {
+    const_value start_value = eval_expr(e, stmt->as.for_stmt.start);
+    const_value end_value = eval_expr(e, stmt->as.for_stmt.end);
+    size_t start_index;
+    size_t end_index;
+    size_t i;
+
+    if (start_value.kind != CONST_FLOAT || end_value.kind != CONST_FLOAT
+        || !float_to_index(start_value.number, &start_index)
+        || !float_to_index(end_value.number, &end_index)) {
+        set_emit_error(e, stmt->line, stmt->column, "for loop range must be compile-time integer bounds");
+        return 0;
+    }
+    if (end_index < start_index) {
+        set_emit_error(e, stmt->line, stmt->column, "for loop end must be greater than or equal to start");
+        return 0;
+    }
+    for (i = start_index; i < end_index; ++i) {
+        const_value loop_value;
+        loop_value.kind = CONST_FLOAT;
+        loop_value.number = (float)i;
+        e->scope_depth++;
+        if (!declare_symbol(e, stmt->as.for_stmt.name, SYMBOL_LET, 0, 1, 1, loop_value, NULL, stmt->line, stmt->column)
+            || !emit_stmt_list(e, &stmt->as.for_stmt.body)) {
+            return 0;
+        }
+        pop_scope_symbols(&e->symbols, e->scope_depth);
+        e->scope_depth--;
+    }
+    return 1;
 }
 
 static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
@@ -1438,7 +1677,7 @@ static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
     switch (stmt->kind) {
         case STMT_LET:
             value = eval_expr(e, stmt->as.binding.value);
-            return declare_symbol(e, stmt->as.binding.name, SYMBOL_LET, 0, value.kind == CONST_FLOAT, value,
+            return declare_symbol(e, stmt->as.binding.name, SYMBOL_LET, 0, 1, value.kind == CONST_FLOAT, value,
                 stmt->as.binding.value, stmt->line, stmt->column);
         case STMT_ASSIGN:
             return emit_assignment(e, stmt);
@@ -1454,6 +1693,8 @@ static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
             return emit_op(e, LUMI_OP_SET_COLOR, -1, stmt->line, stmt->column);
         case STMT_IF:
             return emit_if_stmt(e, stmt);
+        case STMT_FOR:
+            return emit_for_stmt(e, stmt);
     }
     return 0;
 }
@@ -1523,19 +1764,32 @@ int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode,
     for (i = 0; i < program->vars.count; ++i) {
         const lumi_var_decl *var = &program->vars.items[i];
         const_value value = eval_expr(&e, var->initializer);
+        size_t j;
         if (value.kind != CONST_FLOAT) {
             set_emit_error(&e, var->initializer->line, var->initializer->column,
                 "variable initializer for '%s' must be compile-time constant; use init/update/render for runtime setup", var->name);
             goto fail;
         }
         if (var->storage == LUMI_VAR_GLOBAL) {
-            if (!float_buffer_push(&e.initial_globals, value.number)
-                || !declare_symbol(&e, var->name, SYMBOL_GLOBAL_VAR, e.global_count++, 0, value, NULL, 1, 1)) {
+            size_t base = e.global_count;
+            for (j = 0; j < var->array_size; ++j) {
+                if (!float_buffer_push(&e.initial_globals, value.number)) {
+                    goto fail;
+                }
+                e.global_count++;
+            }
+            if (!declare_symbol(&e, var->name, SYMBOL_GLOBAL_VAR, base, var->array_size, 0, value, NULL, 1, 1)) {
                 goto fail;
             }
         } else {
-            if (!float_buffer_push(&e.initial_keys, value.number)
-                || !declare_symbol(&e, var->name, SYMBOL_KEY_VAR, e.key_count++, 0, value, NULL, 1, 1)) {
+            size_t base = e.key_count;
+            for (j = 0; j < var->array_size; ++j) {
+                if (!float_buffer_push(&e.initial_keys, value.number)) {
+                    goto fail;
+                }
+                e.key_count++;
+            }
+            if (!declare_symbol(&e, var->name, SYMBOL_KEY_VAR, base, var->array_size, 0, value, NULL, 1, 1)) {
                 goto fail;
             }
         }

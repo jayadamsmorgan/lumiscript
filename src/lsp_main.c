@@ -70,6 +70,8 @@ static const info_entry keyword_info[] = {
     {"color", "keyword", "Color statement", "Assigns the final output color for the current render invocation."},
     {"if", "keyword", "Conditional", "Supports statement form and value-form `if ... else ...` expressions."},
     {"else", "keyword", "Else branch", "Required for value-form `if` expressions and optional for statement `if`."},
+    {"for", "keyword", "Compile-time loop", "A bounded `for i in start..end { ... }` loop that is unrolled by the compiler."},
+    {"in", "keyword", "Range introducer", "Used in `for` loops between the loop variable and the `start..end` range."},
 };
 
 static const info_entry input_info[] = {
@@ -767,6 +769,8 @@ static int append_completion_items(string_buffer *payload, const char *text) {
         {"color", 14, "keyword"},
         {"if", 14, "keyword"},
         {"else", 14, "keyword"},
+        {"for", 14, "keyword"},
+        {"in", 14, "keyword"},
         {"x", 6, "input"},
         {"y", 6, "input"},
         {"dt", 6, "input"},

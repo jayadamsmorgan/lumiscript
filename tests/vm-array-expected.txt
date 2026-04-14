@@ -1,0 +1,3 @@
+init steps=1
+update g0=10.000000 g1=30.000000 g2=50.000000 steps=13
+render key=0 color=0x0A1E32 g0=10.000000 g1=30.000000 g2=50.000000 steps=6

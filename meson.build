@@ -91,6 +91,18 @@ test(
 )
 
 test(
+  'compile-array-example',
+  find_program('tests/compile_example.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-array.lumi', 'array.lbc'],
+)
+
+test(
+  'compile-ripple-example',
+  find_program('tests/compile_example.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-ripple.lumi', 'ripple.lbc'],
+)
+
+test(
   'lsp-smoke',
   find_program('tests/lsp_smoke.sh'),
   args: [meson.project_build_root()],
@@ -124,6 +136,12 @@ test(
   'reject-if-expr-without-else',
   find_program('tests/compile_fail.sh'),
   args: [meson.project_source_root(), meson.project_build_root(), 'tests/error-if-expr-no-else.lumi', 'if expression requires else branch'],
+)
+
+test(
+  'reject-dynamic-array-index',
+  find_program('tests/compile_fail.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'tests/error-dynamic-array-index.lumi', 'array index'],
 )
 
 test(
@@ -170,6 +188,12 @@ test(
   'run-math-vm',
   find_program('tests/compile_and_run_vm.sh'),
   args: [meson.project_source_root(), meson.project_build_root(), 'example-math.lumi', 'vm-math.lbc', 'tests/vm-math-input.txt', 'tests/vm-math-expected.txt'],
+)
+
+test(
+  'run-array-vm',
+  find_program('tests/compile_and_run_vm.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-array.lumi', 'vm-array.lbc', 'tests/vm-array-input.txt', 'tests/vm-array-expected.txt'],
 )
 
 test(

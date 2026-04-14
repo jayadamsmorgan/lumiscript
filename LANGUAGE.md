@@ -43,6 +43,12 @@ Used for state updated once per tick in `init` or `update`.
 global var phase = 0
 ```
 
+Fixed-size arrays are supported for both persistent storage kinds:
+
+```lumi
+global var ripple_x[4] = 0
+```
+
 ### `key var`
 
 Stored separately for each key.
@@ -56,6 +62,7 @@ key var glow = 0
 ### Variable Initializers
 
 `global var` and `key var` initializers must be compile-time constants.
+Array sizes must be positive compile-time integers.
 
 If you need runtime setup, do it in `init`, `update`, or `render`.
 
@@ -140,20 +147,26 @@ render {
 
 `let` is compile-time folded when possible.
 
+Loop variables introduced by `for` are compile-time constants inside the loop body.
+
 ## Statements
 
 Supported statements inside sections:
 
 - `let name = expr`
 - `name = expr`
+- `name[index] = expr`
 - `color expr`
 - `if expr { ... }`
 - `if expr { ... } else { ... }`
+- `for i in start..end { ... }`
 
 Only variables can be assigned:
 
 - `global var` may be assigned in `init`, `update`, or `render`
 - `key var` may be assigned only in `render`
+- array indexing requires a compile-time integer index
+- `for` loop bounds must be compile-time integers and loops are unrolled by the compiler
 
 ## Expressions
 
@@ -161,6 +174,7 @@ Supported expression forms:
 
 - numeric literals
 - variable and input references
+- array indexing like `ripple_x[0]` or `ripple_x[i]`
 - parentheses
 - unary `-` and `!`
 - binary `*`, `/`, `%`, `+`, `-`
@@ -173,7 +187,7 @@ Example:
 
 ```lumi
 color if pressed {
-    rgb(255, 255, 255)
+    rgb(150, 200, 255)
 } else {
     rgb(0, 0, 0)
 }

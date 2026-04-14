@@ -1,0 +1,13 @@
+type animation
+
+global var slot[3] = 0
+
+update {
+    for i in 0..3 {
+        slot[i] = dt + i * 20
+    }
+}
+
+render {
+    color rgb(slot[0], slot[1], slot[2])
+}
