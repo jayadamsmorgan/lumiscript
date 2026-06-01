@@ -464,6 +464,15 @@ static int execute_section(const lumi_vm_program *program, lumi_vm_state *state,
                     key_base[index] = result.u32;
                 }
                 break;
+            case LUMI_OP_DUP:
+                if (sp == 0) {
+                    set_error(out_error, "stack underflow", 0);
+                    return 0;
+                }
+                if (!push(stack, &sp, state->stack_capacity, stack[sp - 1], out_error)) {
+                    return 0;
+                }
+                break;
             case LUMI_OP_ADD:
             case LUMI_OP_SUB:
             case LUMI_OP_MUL:
@@ -632,6 +641,62 @@ static int execute_section(const lumi_vm_program *program, lumi_vm_state *state,
                 out_output->color = a.u32;
                 out_output->has_color = 1;
                 break;
+            case LUMI_OP_CLAMP: {
+                lumi_cell c;
+                if (!pop(stack, &sp, &c, out_error) || !pop(stack, &sp, &b, out_error) || !pop(stack, &sp, &a, out_error)) {
+                    return 0;
+                }
+                result.f32 = a.f32;
+                if (result.f32 < b.f32) {
+                    result.f32 = b.f32;
+                }
+                if (result.f32 > c.f32) {
+                    result.f32 = c.f32;
+                }
+                if (!push(stack, &sp, state->stack_capacity, result, out_error)) {
+                    return 0;
+                }
+                break;
+            }
+            case LUMI_OP_DIST: {
+                lumi_cell c;
+                lumi_cell d;
+                float dx;
+                float dy;
+                if (!pop(stack, &sp, &d, out_error) || !pop(stack, &sp, &c, out_error)
+                    || !pop(stack, &sp, &b, out_error) || !pop(stack, &sp, &a, out_error)) {
+                    return 0;
+                }
+                dx = a.f32 - c.f32;
+                dy = b.f32 - d.f32;
+                result.f32 = sqrtf(dx * dx + dy * dy);
+                if (!push(stack, &sp, state->stack_capacity, result, out_error)) {
+                    return 0;
+                }
+                break;
+            }
+            case LUMI_OP_RGB: {
+                lumi_cell c;
+                if (!pop(stack, &sp, &c, out_error) || !pop(stack, &sp, &b, out_error) || !pop(stack, &sp, &a, out_error)) {
+                    return 0;
+                }
+                result.u32 = pack_rgb(a.f32, b.f32, c.f32);
+                if (!push(stack, &sp, state->stack_capacity, result, out_error)) {
+                    return 0;
+                }
+                break;
+            }
+            case LUMI_OP_HSV: {
+                lumi_cell c;
+                if (!pop(stack, &sp, &c, out_error) || !pop(stack, &sp, &b, out_error) || !pop(stack, &sp, &a, out_error)) {
+                    return 0;
+                }
+                result.u32 = hsv_to_rgb(a.f32, b.f32, c.f32);
+                if (!push(stack, &sp, state->stack_capacity, result, out_error)) {
+                    return 0;
+                }
+                break;
+            }
             case LUMI_OP_HALT:
                 out_output->instructions_executed = steps;
                 set_error(out_error, NULL, 0);

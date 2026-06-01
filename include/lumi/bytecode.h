@@ -36,6 +36,11 @@ typedef enum lumi_opcode {
     LUMI_OP_JUMP_IF_FALSE,
     LUMI_OP_SET_COLOR,
     LUMI_OP_HALT,
+    LUMI_OP_CLAMP,
+    LUMI_OP_DIST,
+    LUMI_OP_RGB,
+    LUMI_OP_HSV,
+    LUMI_OP_DUP,
 } lumi_opcode;
 
 typedef enum lumi_input_slot {

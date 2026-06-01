@@ -83,6 +83,7 @@ typedef struct emitter {
     size_t global_count;
     size_t key_count;
     int render_has_color;
+    int optimization_level;
 } emitter;
 
 static void *xrealloc(void *ptr, size_t size) {
@@ -1041,6 +1042,15 @@ static int emit_u16(byte_buffer *buf, uint16_t value) {
     return byte_buffer_push(buf, (uint8_t)(value & 0xFF)) && byte_buffer_push(buf, (uint8_t)(value >> 8));
 }
 
+static uint16_t read_u16_bytes(const uint8_t *data) {
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
+
+static void write_u16_bytes(uint8_t *data, uint16_t value) {
+    data[0] = (uint8_t)(value & 0xFF);
+    data[1] = (uint8_t)(value >> 8);
+}
+
 static int adjust_stack(emitter *e, int delta, size_t line, size_t column) {
     int next = (int)e->current_stack + delta;
     if (next < 0) {
@@ -1323,6 +1333,7 @@ static int add_constant(emitter *e, float value, uint16_t *out_index) {
 }
 
 static int emit_expr(emitter *e, const lumi_expr *expr);
+static int expr_is_discardable(emitter *e, const lumi_expr *expr);
 
 static int emit_const_or_runtime(emitter *e, const lumi_expr *expr) {
     const_value value = eval_expr(e, expr);
@@ -1334,6 +1345,60 @@ static int emit_const_or_runtime(emitter *e, const lumi_expr *expr) {
         return emit_op(e, LUMI_OP_PUSH_CONST_F32, 1, expr->line, expr->column) && emit_u16(e->code, index);
     }
     return emit_expr(e, expr);
+}
+
+static int expr_equal(const lumi_expr *a, const lumi_expr *b) {
+    size_t i;
+    if (a == b) {
+        return 1;
+    }
+    if (a == NULL || b == NULL || a->kind != b->kind) {
+        return 0;
+    }
+    switch (a->kind) {
+        case EXPR_NUMBER:
+            return a->as.number == b->as.number;
+        case EXPR_SYMBOL:
+            return strcmp(a->as.symbol.name, b->as.symbol.name) == 0;
+        case EXPR_INDEX:
+            return strcmp(a->as.index.name, b->as.index.name) == 0
+                && expr_equal(a->as.index.index, b->as.index.index);
+        case EXPR_UNARY:
+            return a->as.unary.op == b->as.unary.op
+                && expr_equal(a->as.unary.operand, b->as.unary.operand);
+        case EXPR_BINARY:
+            return a->as.binary.op == b->as.binary.op
+                && expr_equal(a->as.binary.left, b->as.binary.left)
+                && expr_equal(a->as.binary.right, b->as.binary.right);
+        case EXPR_CALL:
+            if (strcmp(a->as.call.name, b->as.call.name) != 0 || a->as.call.arg_count != b->as.call.arg_count) {
+                return 0;
+            }
+            for (i = 0; i < a->as.call.arg_count; ++i) {
+                if (!expr_equal(a->as.call.args[i], b->as.call.args[i])) {
+                    return 0;
+                }
+            }
+            return 1;
+        case EXPR_IF:
+            return expr_equal(a->as.if_expr.condition, b->as.if_expr.condition)
+                && expr_equal(a->as.if_expr.then_value, b->as.if_expr.then_value)
+                && expr_equal(a->as.if_expr.else_value, b->as.if_expr.else_value);
+    }
+    return 0;
+}
+
+static int call_args_are_same_expr(const lumi_expr *expr) {
+    size_t i;
+    if (expr->as.call.arg_count < 2) {
+        return 0;
+    }
+    for (i = 1; i < expr->as.call.arg_count; ++i) {
+        if (!expr_equal(expr->as.call.args[0], expr->as.call.args[i])) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int emit_builtin(emitter *e, const lumi_expr *expr) {
@@ -1397,9 +1462,37 @@ static int emit_builtin(emitter *e, const lumi_expr *expr) {
         set_emit_error(e, expr->line, expr->column, "function '%s' expects %zu arguments", expr->as.call.name, expected);
         return 0;
     }
-    for (i = 0; i < expr->as.call.arg_count; ++i) {
-        if (!emit_const_or_runtime(e, expr->as.call.args[i])) {
+    if (e->optimization_level >= 3 && call_args_are_same_expr(expr) && expr_is_discardable(e, expr->as.call.args[0])) {
+        if (!emit_const_or_runtime(e, expr->as.call.args[0])) {
             return 0;
+        }
+        for (i = 1; i < expr->as.call.arg_count; ++i) {
+            if (!emit_op(e, LUMI_OP_DUP, 1, expr->as.call.args[i]->line, expr->as.call.args[i]->column)) {
+                return 0;
+            }
+        }
+    } else {
+        if (e->error->message != NULL) {
+            return 0;
+        }
+        for (i = 0; i < expr->as.call.arg_count; ++i) {
+            if (!emit_const_or_runtime(e, expr->as.call.args[i])) {
+                return 0;
+            }
+        }
+    }
+    if (e->optimization_level >= 3) {
+        if (builtin == LUMI_BUILTIN_CLAMP) {
+            return emit_op(e, LUMI_OP_CLAMP, -2, expr->line, expr->column);
+        }
+        if (builtin == LUMI_BUILTIN_DIST) {
+            return emit_op(e, LUMI_OP_DIST, -3, expr->line, expr->column);
+        }
+        if (builtin == LUMI_BUILTIN_RGB) {
+            return emit_op(e, LUMI_OP_RGB, -2, expr->line, expr->column);
+        }
+        if (builtin == LUMI_BUILTIN_HSV) {
+            return emit_op(e, LUMI_OP_HSV, -2, expr->line, expr->column);
         }
     }
     return emit_op(e, LUMI_OP_CALL_BUILTIN, (int)(1 - (int)expr->as.call.arg_count), expr->line, expr->column)
@@ -1416,10 +1509,325 @@ static int patch_jump(byte_buffer *code, size_t at, uint16_t target) {
     return 1;
 }
 
+static int expr_const_float(emitter *e, const lumi_expr *expr, float *out_value) {
+    const_value value = eval_expr(e, expr);
+    if (value.kind != CONST_FLOAT) {
+        return 0;
+    }
+    *out_value = value.number;
+    return 1;
+}
+
+static int call_is_discardable_builtin(const lumi_expr *expr) {
+    const char *name = expr->as.call.name;
+    size_t argc = expr->as.call.arg_count;
+    if (strcmp(name, "rand") == 0) {
+        return 0;
+    }
+    return (strcmp(name, "abs") == 0 && argc == 1)
+        || (strcmp(name, "sin") == 0 && argc == 1)
+        || (strcmp(name, "cos") == 0 && argc == 1)
+        || (strcmp(name, "sqrt") == 0 && argc == 1)
+        || (strcmp(name, "ceil") == 0 && argc == 1)
+        || (strcmp(name, "floor") == 0 && argc == 1)
+        || (strcmp(name, "round") == 0 && argc == 1)
+        || (strcmp(name, "clamp") == 0 && argc == 3)
+        || (strcmp(name, "dist") == 0 && argc == 4)
+        || (strcmp(name, "lerp") == 0 && argc == 3)
+        || (strcmp(name, "min") == 0 && argc == 2)
+        || (strcmp(name, "max") == 0 && argc == 2)
+        || (strcmp(name, "pow") == 0 && argc == 2)
+        || (strcmp(name, "rgb") == 0 && argc == 3)
+        || (strcmp(name, "hsv") == 0 && argc == 3);
+}
+
+static int expr_is_discardable(emitter *e, const lumi_expr *expr) {
+    symbol *sym;
+    size_t slot;
+    size_t i;
+
+    switch (expr->kind) {
+        case EXPR_NUMBER:
+            return 1;
+        case EXPR_SYMBOL:
+            sym = find_symbol(&e->symbols, expr->as.symbol.name);
+            if (sym == NULL) {
+                return 0;
+            }
+            return sym->kind != SYMBOL_LET || sym->expr == NULL || expr_is_discardable(e, sym->expr);
+        case EXPR_INDEX:
+            if (!expr_is_discardable(e, expr->as.index.index)) {
+                return 0;
+            }
+            if (!resolve_symbol_slot(e, expr->as.index.name, expr->as.index.index, &sym, &slot, expr->line, expr->column)) {
+                return 0;
+            }
+            (void)slot;
+            return sym->kind != SYMBOL_LET || sym->expr == NULL || expr_is_discardable(e, sym->expr);
+        case EXPR_UNARY:
+            return expr_is_discardable(e, expr->as.unary.operand);
+        case EXPR_BINARY:
+            return expr_is_discardable(e, expr->as.binary.left) && expr_is_discardable(e, expr->as.binary.right);
+        case EXPR_CALL:
+            if (!call_is_discardable_builtin(expr)) {
+                return 0;
+            }
+            if (strcmp(expr->as.call.name, "sqrt") == 0 && expr->as.call.arg_count == 1) {
+                float value;
+                if (!expr_const_float(e, expr->as.call.args[0], &value) || value < 0.0f) {
+                    return 0;
+                }
+            }
+            for (i = 0; i < expr->as.call.arg_count; ++i) {
+                if (!expr_is_discardable(e, expr->as.call.args[i])) {
+                    return 0;
+                }
+            }
+            return 1;
+        case EXPR_IF:
+            return expr_is_discardable(e, expr->as.if_expr.condition)
+                && expr_is_discardable(e, expr->as.if_expr.then_value)
+                && expr_is_discardable(e, expr->as.if_expr.else_value);
+    }
+    return 0;
+}
+
+static int emit_const_float(emitter *e, float value, size_t line, size_t column) {
+    uint16_t index;
+    if (!add_constant(e, value, &index)) {
+        return 0;
+    }
+    return emit_op(e, LUMI_OP_PUSH_CONST_F32, 1, line, column) && emit_u16(e->code, index);
+}
+
+static void clear_expr_payload(lumi_expr *expr) {
+    size_t i;
+    switch (expr->kind) {
+        case EXPR_SYMBOL:
+            free(expr->as.symbol.name);
+            break;
+        case EXPR_INDEX:
+            free(expr->as.index.name);
+            free_expr(expr->as.index.index);
+            break;
+        case EXPR_UNARY:
+            free_expr(expr->as.unary.operand);
+            break;
+        case EXPR_BINARY:
+            free_expr(expr->as.binary.left);
+            free_expr(expr->as.binary.right);
+            break;
+        case EXPR_CALL:
+            free(expr->as.call.name);
+            for (i = 0; i < expr->as.call.arg_count; ++i) {
+                free_expr(expr->as.call.args[i]);
+            }
+            free(expr->as.call.args);
+            break;
+        case EXPR_IF:
+            free_expr(expr->as.if_expr.condition);
+            free_expr(expr->as.if_expr.then_value);
+            free_expr(expr->as.if_expr.else_value);
+            break;
+        case EXPR_NUMBER:
+            break;
+    }
+}
+
+static void rewrite_expr_as_number(lumi_expr *expr, float value) {
+    clear_expr_payload(expr);
+    expr->kind = EXPR_NUMBER;
+    expr->as.number = value;
+}
+
+static lumi_expr *take_expr_child(lumi_expr *expr, lumi_expr *child) {
+    free(expr);
+    return child;
+}
+
+static lumi_expr *simplify_expr(emitter *e, lumi_expr *expr) {
+    const_value value;
+    float left;
+    float right;
+    size_t i;
+
+    if (expr == NULL || e->error->message != NULL || e->optimization_level < 1) {
+        return expr;
+    }
+
+    switch (expr->kind) {
+        case EXPR_UNARY:
+            expr->as.unary.operand = simplify_expr(e, expr->as.unary.operand);
+            break;
+        case EXPR_BINARY:
+            expr->as.binary.left = simplify_expr(e, expr->as.binary.left);
+            expr->as.binary.right = simplify_expr(e, expr->as.binary.right);
+            break;
+        case EXPR_CALL:
+            for (i = 0; i < expr->as.call.arg_count; ++i) {
+                expr->as.call.args[i] = simplify_expr(e, expr->as.call.args[i]);
+            }
+            break;
+        case EXPR_IF:
+            expr->as.if_expr.condition = simplify_expr(e, expr->as.if_expr.condition);
+            if (expr_const_float(e, expr->as.if_expr.condition, &left)) {
+                lumi_expr *chosen = left != 0.0f ? expr->as.if_expr.then_value : expr->as.if_expr.else_value;
+                lumi_expr *discarded = left != 0.0f ? expr->as.if_expr.else_value : expr->as.if_expr.then_value;
+                free_expr(expr->as.if_expr.condition);
+                free_expr(discarded);
+                return simplify_expr(e, take_expr_child(expr, chosen));
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            expr->as.if_expr.then_value = simplify_expr(e, expr->as.if_expr.then_value);
+            expr->as.if_expr.else_value = simplify_expr(e, expr->as.if_expr.else_value);
+            break;
+        case EXPR_INDEX:
+            expr->as.index.index = simplify_expr(e, expr->as.index.index);
+            break;
+        case EXPR_NUMBER:
+        case EXPR_SYMBOL:
+            break;
+    }
+
+    if (e->error->message != NULL) {
+        return expr;
+    }
+
+    value = eval_expr(e, expr);
+    if (value.kind == CONST_FLOAT && expr_is_discardable(e, expr)) {
+        rewrite_expr_as_number(expr, value.number);
+        return expr;
+    }
+    if (e->error->message != NULL || expr->kind != EXPR_BINARY || e->optimization_level < 2) {
+        return expr;
+    }
+
+    switch (expr->as.binary.op) {
+        case TOKEN_PLUS:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f) {
+                lumi_expr *left_expr = expr->as.binary.left;
+                free_expr(expr->as.binary.right);
+                return take_expr_child(expr, left_expr);
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f) {
+                lumi_expr *right_expr = expr->as.binary.right;
+                free_expr(expr->as.binary.left);
+                return take_expr_child(expr, right_expr);
+            }
+            break;
+        case TOKEN_MINUS:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f) {
+                lumi_expr *left_expr = expr->as.binary.left;
+                free_expr(expr->as.binary.right);
+                return take_expr_child(expr, left_expr);
+            }
+            break;
+        case TOKEN_STAR:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 1.0f) {
+                lumi_expr *left_expr = expr->as.binary.left;
+                free_expr(expr->as.binary.right);
+                return take_expr_child(expr, left_expr);
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 1.0f) {
+                lumi_expr *right_expr = expr->as.binary.right;
+                free_expr(expr->as.binary.left);
+                return take_expr_child(expr, right_expr);
+            }
+            break;
+        case TOKEN_SLASH:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 1.0f) {
+                lumi_expr *left_expr = expr->as.binary.left;
+                free_expr(expr->as.binary.right);
+                return take_expr_child(expr, left_expr);
+            }
+            break;
+        case TOKEN_PERCENT:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            break;
+        case TOKEN_AND_AND:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                rewrite_expr_as_number(expr, 0.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            break;
+        case TOKEN_OR_OR:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left != 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                rewrite_expr_as_number(expr, 1.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right != 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                rewrite_expr_as_number(expr, 1.0f);
+                return expr;
+            }
+            if (e->error->message != NULL) {
+                return expr;
+            }
+            break;
+        default:
+            break;
+    }
+    return expr;
+}
+
 static int emit_if_expr(emitter *e, const lumi_expr *expr) {
     size_t jump_false;
     size_t jump_end;
     uint16_t stack_before = e->current_stack;
+    float condition;
+
+    if (e->optimization_level >= 1 && expr_const_float(e, expr->as.if_expr.condition, &condition)) {
+        return emit_const_or_runtime(e, condition != 0.0f ? expr->as.if_expr.then_value : expr->as.if_expr.else_value);
+    }
 
     if (!emit_const_or_runtime(e, expr->as.if_expr.condition)) {
         return 0;
@@ -1457,6 +1865,130 @@ static int emit_if_expr(emitter *e, const lumi_expr *expr) {
         return 0;
     }
     return patch_jump(e->code, jump_end, (uint16_t)e->code->count);
+}
+
+static int emit_optimized_binary(emitter *e, const lumi_expr *expr) {
+    float left;
+    float right;
+
+    if (e->optimization_level < 2) {
+        return 0;
+    }
+
+    switch (expr->as.binary.op) {
+        case TOKEN_PLUS:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.left);
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.right);
+            }
+            break;
+        case TOKEN_MINUS:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.left);
+            }
+            break;
+        case TOKEN_STAR:
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 1.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.left);
+            }
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 1.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.right);
+            }
+            break;
+        case TOKEN_SLASH:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 1.0f) {
+                return emit_const_or_runtime(e, expr->as.binary.left);
+            }
+            break;
+        case TOKEN_PERCENT:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            break;
+        case TOKEN_AND_AND:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left == 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right == 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                return emit_const_float(e, 0.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            break;
+        case TOKEN_OR_OR:
+            if (expr_const_float(e, expr->as.binary.left, &left) && left != 0.0f
+                && expr_is_discardable(e, expr->as.binary.right)) {
+                return emit_const_float(e, 1.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (expr_const_float(e, expr->as.binary.right, &right) && right != 0.0f
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                return emit_const_float(e, 1.0f, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
+
+static int emit_binary_opcode(emitter *e, lumi_token_type op, size_t line, size_t column) {
+    switch (op) {
+        case TOKEN_PLUS: return emit_op(e, LUMI_OP_ADD, -1, line, column);
+        case TOKEN_MINUS: return emit_op(e, LUMI_OP_SUB, -1, line, column);
+        case TOKEN_STAR: return emit_op(e, LUMI_OP_MUL, -1, line, column);
+        case TOKEN_SLASH: return emit_op(e, LUMI_OP_DIV, -1, line, column);
+        case TOKEN_PERCENT: return emit_op(e, LUMI_OP_MOD, -1, line, column);
+        case TOKEN_EQ_EQ: return emit_op(e, LUMI_OP_EQ, -1, line, column);
+        case TOKEN_BANG_EQ: return emit_op(e, LUMI_OP_NE, -1, line, column);
+        case TOKEN_LT: return emit_op(e, LUMI_OP_LT, -1, line, column);
+        case TOKEN_LT_EQ: return emit_op(e, LUMI_OP_LE, -1, line, column);
+        case TOKEN_GT: return emit_op(e, LUMI_OP_GT, -1, line, column);
+        case TOKEN_GT_EQ: return emit_op(e, LUMI_OP_GE, -1, line, column);
+        case TOKEN_AND_AND: return emit_op(e, LUMI_OP_AND, -1, line, column);
+        case TOKEN_OR_OR: return emit_op(e, LUMI_OP_OR, -1, line, column);
+        default:
+            set_emit_error(e, line, column, "unsupported operator");
+            return 0;
+    }
 }
 
 static int emit_expr(emitter *e, const lumi_expr *expr) {
@@ -1526,27 +2058,28 @@ static int emit_expr(emitter *e, const lumi_expr *expr) {
             }
             return emit_op(e, expr->as.unary.op == TOKEN_MINUS ? LUMI_OP_NEG : LUMI_OP_NOT, 0, expr->line, expr->column);
         case EXPR_BINARY:
+            if (emit_optimized_binary(e, expr)) {
+                return 1;
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
+            if (e->optimization_level >= 3
+                && expr_equal(expr->as.binary.left, expr->as.binary.right)
+                && expr_is_discardable(e, expr->as.binary.left)) {
+                if (!emit_const_or_runtime(e, expr->as.binary.left)
+                    || !emit_op(e, LUMI_OP_DUP, 1, expr->as.binary.right->line, expr->as.binary.right->column)) {
+                    return 0;
+                }
+                return emit_binary_opcode(e, expr->as.binary.op, expr->line, expr->column);
+            }
+            if (e->error->message != NULL) {
+                return 0;
+            }
             if (!emit_const_or_runtime(e, expr->as.binary.left) || !emit_const_or_runtime(e, expr->as.binary.right)) {
                 return 0;
             }
-            switch (expr->as.binary.op) {
-                case TOKEN_PLUS: return emit_op(e, LUMI_OP_ADD, -1, expr->line, expr->column);
-                case TOKEN_MINUS: return emit_op(e, LUMI_OP_SUB, -1, expr->line, expr->column);
-                case TOKEN_STAR: return emit_op(e, LUMI_OP_MUL, -1, expr->line, expr->column);
-                case TOKEN_SLASH: return emit_op(e, LUMI_OP_DIV, -1, expr->line, expr->column);
-                case TOKEN_PERCENT: return emit_op(e, LUMI_OP_MOD, -1, expr->line, expr->column);
-                case TOKEN_EQ_EQ: return emit_op(e, LUMI_OP_EQ, -1, expr->line, expr->column);
-                case TOKEN_BANG_EQ: return emit_op(e, LUMI_OP_NE, -1, expr->line, expr->column);
-                case TOKEN_LT: return emit_op(e, LUMI_OP_LT, -1, expr->line, expr->column);
-                case TOKEN_LT_EQ: return emit_op(e, LUMI_OP_LE, -1, expr->line, expr->column);
-                case TOKEN_GT: return emit_op(e, LUMI_OP_GT, -1, expr->line, expr->column);
-                case TOKEN_GT_EQ: return emit_op(e, LUMI_OP_GE, -1, expr->line, expr->column);
-                case TOKEN_AND_AND: return emit_op(e, LUMI_OP_AND, -1, expr->line, expr->column);
-                case TOKEN_OR_OR: return emit_op(e, LUMI_OP_OR, -1, expr->line, expr->column);
-                default:
-                    set_emit_error(e, expr->line, expr->column, "unsupported operator");
-                    return 0;
-            }
+            return emit_binary_opcode(e, expr->as.binary.op, expr->line, expr->column);
         case EXPR_CALL:
             return emit_builtin(e, expr);
         case EXPR_IF:
@@ -1555,7 +2088,7 @@ static int emit_expr(emitter *e, const lumi_expr *expr) {
     return 0;
 }
 
-static int emit_stmt_list(emitter *e, const lumi_stmt_list *list);
+static int emit_stmt_list(emitter *e, lumi_stmt_list *list);
 static int stmt_list_guarantees_color(const lumi_stmt_list *list);
 
 static int stmt_guarantees_color(const lumi_stmt *stmt) {
@@ -1586,10 +2119,40 @@ static int stmt_list_guarantees_color(const lumi_stmt_list *list) {
     return 0;
 }
 
-static int emit_if_stmt(emitter *e, const lumi_stmt *stmt) {
+static int emit_if_stmt(emitter *e, lumi_stmt *stmt) {
     size_t jump_false;
     size_t jump_end;
     uint16_t stack_before = e->current_stack;
+    float condition;
+
+    stmt->as.if_stmt.condition = simplify_expr(e, stmt->as.if_stmt.condition);
+    if (e->error->message != NULL) {
+        return 0;
+    }
+    if (stmt->as.if_stmt.then_branch.count == 0 && stmt->as.if_stmt.else_branch.count == 0
+        && expr_is_discardable(e, stmt->as.if_stmt.condition)) {
+        return 1;
+    }
+    if (e->error->message != NULL) {
+        return 0;
+    }
+    if (e->optimization_level >= 1 && expr_const_float(e, stmt->as.if_stmt.condition, &condition)) {
+        lumi_stmt_list *branch = condition != 0.0f ? &stmt->as.if_stmt.then_branch : &stmt->as.if_stmt.else_branch;
+        e->scope_depth++;
+        if (!emit_stmt_list(e, branch)) {
+            return 0;
+        }
+        pop_scope_symbols(&e->symbols, e->scope_depth);
+        e->scope_depth--;
+        if (e->current_stack != stack_before) {
+            set_emit_error(e, stmt->line, stmt->column, "if statement branch must preserve stack depth");
+            return 0;
+        }
+        return 1;
+    }
+    if (e->error->message != NULL) {
+        return 0;
+    }
 
     if (!emit_const_or_runtime(e, stmt->as.if_stmt.condition)) {
         return 0;
@@ -1639,9 +2202,14 @@ static int emit_if_stmt(emitter *e, const lumi_stmt *stmt) {
     return patch_jump(e->code, jump_false, (uint16_t)e->code->count);
 }
 
-static int emit_assignment(emitter *e, const lumi_stmt *stmt) {
+static int emit_assignment(emitter *e, lumi_stmt *stmt) {
     symbol *sym;
     size_t slot;
+    stmt->as.assign.index = simplify_expr(e, stmt->as.assign.index);
+    stmt->as.assign.value = simplify_expr(e, stmt->as.assign.value);
+    if (e->error->message != NULL) {
+        return 0;
+    }
     if (!resolve_symbol_slot(e, stmt->as.assign.name, stmt->as.assign.index, &sym, &slot, stmt->line, stmt->column)) {
         return 0;
     }
@@ -1660,12 +2228,20 @@ static int emit_assignment(emitter *e, const lumi_stmt *stmt) {
         && emit_u16(e->code, (uint16_t)slot);
 }
 
-static int emit_for_stmt(emitter *e, const lumi_stmt *stmt) {
-    const_value start_value = eval_expr(e, stmt->as.for_stmt.start);
-    const_value end_value = eval_expr(e, stmt->as.for_stmt.end);
+static int emit_for_stmt(emitter *e, lumi_stmt *stmt) {
+    const_value start_value;
+    const_value end_value;
     size_t start_index;
     size_t end_index;
     size_t i;
+
+    stmt->as.for_stmt.start = simplify_expr(e, stmt->as.for_stmt.start);
+    stmt->as.for_stmt.end = simplify_expr(e, stmt->as.for_stmt.end);
+    if (e->error->message != NULL) {
+        return 0;
+    }
+    start_value = eval_expr(e, stmt->as.for_stmt.start);
+    end_value = eval_expr(e, stmt->as.for_stmt.end);
 
     if (start_value.kind != CONST_FLOAT || end_value.kind != CONST_FLOAT
         || !float_to_index(start_value.number, &start_index)
@@ -1676,6 +2252,9 @@ static int emit_for_stmt(emitter *e, const lumi_stmt *stmt) {
     if (end_index < start_index) {
         set_emit_error(e, stmt->line, stmt->column, "for loop end must be greater than or equal to start");
         return 0;
+    }
+    if (stmt->as.for_stmt.body.count == 0) {
+        return 1;
     }
     for (i = start_index; i < end_index; ++i) {
         const_value loop_value;
@@ -1692,11 +2271,15 @@ static int emit_for_stmt(emitter *e, const lumi_stmt *stmt) {
     return 1;
 }
 
-static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
+static int emit_stmt(emitter *e, lumi_stmt *stmt) {
     const_value value;
 
     switch (stmt->kind) {
         case STMT_LET:
+            stmt->as.binding.value = simplify_expr(e, stmt->as.binding.value);
+            if (e->error->message != NULL) {
+                return 0;
+            }
             value = eval_expr(e, stmt->as.binding.value);
             return declare_symbol(e, stmt->as.binding.name, SYMBOL_LET, 0, 1, value.kind == CONST_FLOAT, value,
                 stmt->as.binding.value, stmt->line, stmt->column);
@@ -1705,6 +2288,10 @@ static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
         case STMT_COLOR:
             if (e->current_section != SECTION_RENDER) {
                 set_emit_error(e, stmt->line, stmt->column, "color can only be assigned in render");
+                return 0;
+            }
+            stmt->as.color.value = simplify_expr(e, stmt->as.color.value);
+            if (e->error->message != NULL) {
                 return 0;
             }
             if (!emit_const_or_runtime(e, stmt->as.color.value)) {
@@ -1720,9 +2307,126 @@ static int emit_stmt(emitter *e, const lumi_stmt *stmt) {
     return 0;
 }
 
-static int emit_stmt_list(emitter *e, const lumi_stmt_list *list) {
+static int expr_indices_match(emitter *e, const lumi_expr *a, const lumi_expr *b) {
+    const_value av;
+    const_value bv;
+    size_t ai;
+    size_t bi;
+    if (a == NULL || b == NULL) {
+        return a == b;
+    }
+    av = eval_expr(e, a);
+    bv = eval_expr(e, b);
+    return av.kind == CONST_FLOAT && bv.kind == CONST_FLOAT
+        && float_to_index(av.number, &ai) && float_to_index(bv.number, &bi)
+        && ai == bi;
+}
+
+static int expr_reads_target(emitter *e, const lumi_expr *expr, const char *name, const lumi_expr *index) {
+    size_t i;
+    if (expr == NULL) {
+        return 0;
+    }
+    switch (expr->kind) {
+        case EXPR_SYMBOL:
+            return index == NULL && strcmp(expr->as.symbol.name, name) == 0;
+        case EXPR_INDEX:
+            return strcmp(expr->as.index.name, name) == 0 && expr_indices_match(e, expr->as.index.index, index);
+        case EXPR_UNARY:
+            return expr_reads_target(e, expr->as.unary.operand, name, index);
+        case EXPR_BINARY:
+            return expr_reads_target(e, expr->as.binary.left, name, index)
+                || expr_reads_target(e, expr->as.binary.right, name, index);
+        case EXPR_CALL:
+            for (i = 0; i < expr->as.call.arg_count; ++i) {
+                if (expr_reads_target(e, expr->as.call.args[i], name, index)) {
+                    return 1;
+                }
+            }
+            return 0;
+        case EXPR_IF:
+            return expr_reads_target(e, expr->as.if_expr.condition, name, index)
+                || expr_reads_target(e, expr->as.if_expr.then_value, name, index)
+                || expr_reads_target(e, expr->as.if_expr.else_value, name, index);
+        case EXPR_NUMBER:
+            return 0;
+    }
+    return 0;
+}
+
+static int stmt_reads_target(emitter *e, const lumi_stmt *stmt, const char *name, const lumi_expr *index) {
+    size_t i;
+    switch (stmt->kind) {
+        case STMT_LET:
+            return expr_reads_target(e, stmt->as.binding.value, name, index);
+        case STMT_ASSIGN:
+            return expr_reads_target(e, stmt->as.assign.index, name, index)
+                || expr_reads_target(e, stmt->as.assign.value, name, index);
+        case STMT_COLOR:
+            return expr_reads_target(e, stmt->as.color.value, name, index);
+        case STMT_IF:
+            if (expr_reads_target(e, stmt->as.if_stmt.condition, name, index)) {
+                return 1;
+            }
+            for (i = 0; i < stmt->as.if_stmt.then_branch.count; ++i) {
+                if (stmt_reads_target(e, stmt->as.if_stmt.then_branch.items[i], name, index)) {
+                    return 1;
+                }
+            }
+            for (i = 0; i < stmt->as.if_stmt.else_branch.count; ++i) {
+                if (stmt_reads_target(e, stmt->as.if_stmt.else_branch.items[i], name, index)) {
+                    return 1;
+                }
+            }
+            return 0;
+        case STMT_FOR:
+            if (expr_reads_target(e, stmt->as.for_stmt.start, name, index)
+                || expr_reads_target(e, stmt->as.for_stmt.end, name, index)) {
+                return 1;
+            }
+            for (i = 0; i < stmt->as.for_stmt.body.count; ++i) {
+                if (stmt_reads_target(e, stmt->as.for_stmt.body.items[i], name, index)) {
+                    return 1;
+                }
+            }
+            return 0;
+    }
+    return 0;
+}
+
+static int same_assignment_target(emitter *e, const lumi_stmt *a, const lumi_stmt *b) {
+    return a->kind == STMT_ASSIGN && b->kind == STMT_ASSIGN
+        && strcmp(a->as.assign.name, b->as.assign.name) == 0
+        && expr_indices_match(e, a->as.assign.index, b->as.assign.index);
+}
+
+static int assignment_is_dead_store(emitter *e, lumi_stmt_list *list, size_t at) {
+    lumi_stmt *stmt = list->items[at];
+    size_t i;
+    if (e->optimization_level < 2 || stmt->kind != STMT_ASSIGN || !expr_is_discardable(e, stmt->as.assign.value)) {
+        return 0;
+    }
+    for (i = at + 1; i < list->count; ++i) {
+        lumi_stmt *next = list->items[i];
+        if (stmt_reads_target(e, next, stmt->as.assign.name, stmt->as.assign.index)) {
+            return 0;
+        }
+        if (same_assignment_target(e, stmt, next)) {
+            return 1;
+        }
+        if (next->kind == STMT_IF || next->kind == STMT_FOR || next->kind == STMT_COLOR) {
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static int emit_stmt_list(emitter *e, lumi_stmt_list *list) {
     size_t i;
     for (i = 0; i < list->count; ++i) {
+        if (assignment_is_dead_store(e, list, i)) {
+            continue;
+        }
         if (!emit_stmt(e, list->items[i])) {
             return 0;
         }
@@ -1730,7 +2434,7 @@ static int emit_stmt_list(emitter *e, const lumi_stmt_list *list) {
     return 1;
 }
 
-static int emit_section(emitter *e, section_kind section, const lumi_stmt_list *list) {
+static int emit_section(emitter *e, section_kind section, lumi_stmt_list *list) {
     uint16_t saved_stack = e->current_stack;
     byte_buffer *saved_code = e->code;
     size_t saved_scope = e->scope_depth;
@@ -1755,7 +2459,660 @@ static int emit_section(emitter *e, section_kind section, const lumi_stmt_list *
     return 1;
 }
 
-int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode, lumi_emit_error *out_error) {
+static int bytecode_instruction_size(const byte_buffer *code, size_t pc, size_t *out_size) {
+    uint8_t op;
+    if (pc >= code->count) {
+        return 0;
+    }
+    op = code->data[pc];
+    switch (op) {
+        case LUMI_OP_PUSH_CONST_F32:
+        case LUMI_OP_LOAD_GLOBAL:
+        case LUMI_OP_STORE_GLOBAL:
+        case LUMI_OP_LOAD_KEY:
+        case LUMI_OP_STORE_KEY:
+        case LUMI_OP_CALL_BUILTIN:
+        case LUMI_OP_JUMP:
+        case LUMI_OP_JUMP_IF_FALSE:
+            if (pc + 3 > code->count) {
+                return 0;
+            }
+            *out_size = 3;
+            return 1;
+        case LUMI_OP_LOAD_INPUT:
+            if (pc + 2 > code->count) {
+                return 0;
+            }
+            *out_size = 2;
+            return 1;
+        case LUMI_OP_ADD:
+        case LUMI_OP_SUB:
+        case LUMI_OP_MUL:
+        case LUMI_OP_DIV:
+        case LUMI_OP_MOD:
+        case LUMI_OP_NEG:
+        case LUMI_OP_NOT:
+        case LUMI_OP_EQ:
+        case LUMI_OP_NE:
+        case LUMI_OP_LT:
+        case LUMI_OP_LE:
+        case LUMI_OP_GT:
+        case LUMI_OP_GE:
+        case LUMI_OP_AND:
+        case LUMI_OP_OR:
+        case LUMI_OP_SET_COLOR:
+        case LUMI_OP_HALT:
+        case LUMI_OP_CLAMP:
+        case LUMI_OP_DIST:
+        case LUMI_OP_RGB:
+        case LUMI_OP_HSV:
+        case LUMI_OP_DUP:
+            *out_size = 1;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int optimize_noop_jumps(emitter *e, byte_buffer *code) {
+    unsigned char *remove_instr;
+    size_t *pc_map;
+    uint8_t *new_data;
+    size_t pc = 0;
+    size_t new_count = 0;
+    size_t out = 0;
+
+    if (code->count == 0) {
+        return 1;
+    }
+    remove_instr = calloc(code->count, sizeof(*remove_instr));
+    pc_map = malloc((code->count + 1) * sizeof(*pc_map));
+    if (remove_instr == NULL || pc_map == NULL) {
+        free(remove_instr);
+        free(pc_map);
+        set_emit_error(e, 1, 1, "out of memory while optimizing bytecode");
+        return 0;
+    }
+
+    while (pc < code->count) {
+        size_t size;
+        size_t i;
+        int remove = 0;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            free(remove_instr);
+            free(pc_map);
+            set_emit_error(e, 1, 1, "invalid bytecode while optimizing");
+            return 0;
+        }
+        if (code->data[pc] == LUMI_OP_JUMP) {
+            uint16_t target = read_u16_bytes(code->data + pc + 1);
+            remove = target == pc + size;
+        }
+        remove_instr[pc] = (unsigned char)remove;
+        for (i = 0; i < size; ++i) {
+            pc_map[pc + i] = new_count;
+        }
+        if (!remove) {
+            new_count += size;
+        }
+        pc += size;
+    }
+    pc_map[code->count] = new_count;
+
+    if (new_count == code->count) {
+        free(remove_instr);
+        free(pc_map);
+        return 1;
+    }
+
+    new_data = malloc(new_count == 0 ? 1 : new_count);
+    if (new_data == NULL) {
+        free(remove_instr);
+        free(pc_map);
+        set_emit_error(e, 1, 1, "out of memory while optimizing bytecode");
+        return 0;
+    }
+
+    pc = 0;
+    while (pc < code->count) {
+        size_t size;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            free(new_data);
+            free(remove_instr);
+            free(pc_map);
+            set_emit_error(e, 1, 1, "invalid bytecode while optimizing");
+            return 0;
+        }
+        if (!remove_instr[pc]) {
+            memcpy(new_data + out, code->data + pc, size);
+            if (code->data[pc] == LUMI_OP_JUMP || code->data[pc] == LUMI_OP_JUMP_IF_FALSE) {
+                uint16_t target = read_u16_bytes(code->data + pc + 1);
+                size_t mapped_target;
+                if (target > code->count) {
+                    free(new_data);
+                    free(remove_instr);
+                    free(pc_map);
+                    set_emit_error(e, 1, 1, "jump target out of range while optimizing");
+                    return 0;
+                }
+                mapped_target = pc_map[target];
+                if (mapped_target > UINT16_MAX) {
+                    free(new_data);
+                    free(remove_instr);
+                    free(pc_map);
+                    set_emit_error(e, 1, 1, "optimized bytecode is too large");
+                    return 0;
+                }
+                write_u16_bytes(new_data + out + 1, (uint16_t)mapped_target);
+            }
+            out += size;
+        }
+        pc += size;
+    }
+
+    free(code->data);
+    code->data = new_data;
+    code->count = new_count;
+    code->capacity = new_count;
+    free(remove_instr);
+    free(pc_map);
+    return 1;
+}
+
+static int thread_jumps(emitter *e, byte_buffer *code) {
+    size_t pc = 0;
+    while (pc < code->count) {
+        size_t size;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            set_emit_error(e, 1, 1, "invalid bytecode while threading jumps");
+            return 0;
+        }
+        if (code->data[pc] == LUMI_OP_JUMP || code->data[pc] == LUMI_OP_JUMP_IF_FALSE) {
+            uint16_t original = read_u16_bytes(code->data + pc + 1);
+            uint16_t target = original;
+            size_t guard = 0;
+            while (target < code->count && code->data[target] == LUMI_OP_JUMP && guard++ < code->count) {
+                target = read_u16_bytes(code->data + target + 1);
+            }
+            if (guard >= code->count) {
+                set_emit_error(e, 1, 1, "jump cycle while optimizing");
+                return 0;
+            }
+            if (target != original) {
+                write_u16_bytes(code->data + pc + 1, target);
+            }
+        }
+        pc += size;
+    }
+    return 1;
+}
+
+static int remove_unreachable_code(emitter *e, byte_buffer *code) {
+    unsigned char *is_start;
+    unsigned char *reachable;
+    size_t *worklist;
+    size_t work_count = 0;
+    size_t pc = 0;
+    int changed = 0;
+
+    if (code->count == 0) {
+        return 1;
+    }
+    is_start = calloc(code->count, sizeof(*is_start));
+    reachable = calloc(code->count, sizeof(*reachable));
+    worklist = malloc(code->count * sizeof(*worklist));
+    if (is_start == NULL || reachable == NULL || worklist == NULL) {
+        free(is_start);
+        free(reachable);
+        free(worklist);
+        set_emit_error(e, 1, 1, "out of memory while removing dead code");
+        return 0;
+    }
+
+    while (pc < code->count) {
+        size_t size;
+        is_start[pc] = 1;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            free(is_start);
+            free(reachable);
+            free(worklist);
+            set_emit_error(e, 1, 1, "invalid bytecode while removing dead code");
+            return 0;
+        }
+        pc += size;
+    }
+
+#define PUSH_REACHABLE(target_pc) \
+    do { \
+        size_t _target = (target_pc); \
+        if (_target >= code->count || !is_start[_target]) { \
+            free(is_start); \
+            free(reachable); \
+            free(worklist); \
+            set_emit_error(e, 1, 1, "invalid jump target while removing dead code"); \
+            return 0; \
+        } \
+        if (!reachable[_target]) { \
+            reachable[_target] = 1; \
+            worklist[work_count++] = _target; \
+        } \
+    } while (0)
+
+    PUSH_REACHABLE(0);
+    while (work_count > 0) {
+        size_t current = worklist[--work_count];
+        size_t size;
+        uint8_t op;
+        if (!bytecode_instruction_size(code, current, &size)) {
+            free(is_start);
+            free(reachable);
+            free(worklist);
+            set_emit_error(e, 1, 1, "invalid bytecode while removing dead code");
+            return 0;
+        }
+        op = code->data[current];
+        if (op == LUMI_OP_JUMP) {
+            PUSH_REACHABLE(read_u16_bytes(code->data + current + 1));
+        } else if (op == LUMI_OP_JUMP_IF_FALSE) {
+            PUSH_REACHABLE(read_u16_bytes(code->data + current + 1));
+            if (current + size < code->count) {
+                PUSH_REACHABLE(current + size);
+            }
+        } else if (op != LUMI_OP_HALT && current + size < code->count) {
+            PUSH_REACHABLE(current + size);
+        }
+    }
+#undef PUSH_REACHABLE
+
+    for (pc = 0; pc < code->count; ++pc) {
+        if (is_start[pc] && !reachable[pc]) {
+            changed = 1;
+            break;
+        }
+    }
+
+    if (changed) {
+        unsigned char *remove_instr = calloc(code->count, sizeof(*remove_instr));
+        size_t *pc_map = malloc((code->count + 1) * sizeof(*pc_map));
+        uint8_t *new_data;
+        size_t new_count = 0;
+        size_t out = 0;
+
+        if (remove_instr == NULL || pc_map == NULL) {
+            free(remove_instr);
+            free(pc_map);
+            free(is_start);
+            free(reachable);
+            free(worklist);
+            set_emit_error(e, 1, 1, "out of memory while removing dead code");
+            return 0;
+        }
+
+        pc = 0;
+        while (pc < code->count) {
+            size_t size;
+            size_t i;
+            if (!bytecode_instruction_size(code, pc, &size)) {
+                free(remove_instr);
+                free(pc_map);
+                free(is_start);
+                free(reachable);
+                free(worklist);
+                set_emit_error(e, 1, 1, "invalid bytecode while removing dead code");
+                return 0;
+            }
+            remove_instr[pc] = !reachable[pc];
+            for (i = 0; i < size; ++i) {
+                pc_map[pc + i] = new_count;
+            }
+            if (!remove_instr[pc]) {
+                new_count += size;
+            }
+            pc += size;
+        }
+        pc_map[code->count] = new_count;
+
+        new_data = malloc(new_count == 0 ? 1 : new_count);
+        if (new_data == NULL) {
+            free(remove_instr);
+            free(pc_map);
+            free(is_start);
+            free(reachable);
+            free(worklist);
+            set_emit_error(e, 1, 1, "out of memory while removing dead code");
+            return 0;
+        }
+
+        pc = 0;
+        while (pc < code->count) {
+            size_t size;
+            if (!bytecode_instruction_size(code, pc, &size)) {
+                free(new_data);
+                free(remove_instr);
+                free(pc_map);
+                free(is_start);
+                free(reachable);
+                free(worklist);
+                set_emit_error(e, 1, 1, "invalid bytecode while removing dead code");
+                return 0;
+            }
+            if (!remove_instr[pc]) {
+                memcpy(new_data + out, code->data + pc, size);
+                if (code->data[pc] == LUMI_OP_JUMP || code->data[pc] == LUMI_OP_JUMP_IF_FALSE) {
+                    uint16_t target = read_u16_bytes(code->data + pc + 1);
+                    size_t mapped_target = pc_map[target];
+                    if (mapped_target > UINT16_MAX) {
+                        free(new_data);
+                        free(remove_instr);
+                        free(pc_map);
+                        free(is_start);
+                        free(reachable);
+                        free(worklist);
+                        set_emit_error(e, 1, 1, "optimized bytecode is too large");
+                        return 0;
+                    }
+                    write_u16_bytes(new_data + out + 1, (uint16_t)mapped_target);
+                }
+                out += size;
+            }
+            pc += size;
+        }
+
+        free(code->data);
+        code->data = new_data;
+        code->count = new_count;
+        code->capacity = new_count;
+        free(remove_instr);
+        free(pc_map);
+    }
+
+    free(is_start);
+    free(reachable);
+    free(worklist);
+    return 1;
+}
+
+static int mark_section_constants(emitter *e, const byte_buffer *code, unsigned char *used) {
+    size_t pc = 0;
+    while (pc < code->count) {
+        size_t size;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            set_emit_error(e, 1, 1, "invalid bytecode while optimizing constants");
+            return 0;
+        }
+        if (code->data[pc] == LUMI_OP_PUSH_CONST_F32) {
+            uint16_t index = read_u16_bytes(code->data + pc + 1);
+            if (index >= e->constants.count) {
+                set_emit_error(e, 1, 1, "constant index out of range while optimizing");
+                return 0;
+            }
+            used[index] = 1;
+        }
+        pc += size;
+    }
+    return 1;
+}
+
+static int rewrite_section_constants(emitter *e, byte_buffer *code, const size_t *mapping) {
+    size_t pc = 0;
+    while (pc < code->count) {
+        size_t size;
+        if (!bytecode_instruction_size(code, pc, &size)) {
+            set_emit_error(e, 1, 1, "invalid bytecode while rewriting constants");
+            return 0;
+        }
+        if (code->data[pc] == LUMI_OP_PUSH_CONST_F32) {
+            uint16_t index = read_u16_bytes(code->data + pc + 1);
+            if (mapping[index] > UINT16_MAX) {
+                set_emit_error(e, 1, 1, "constant table is too large");
+                return 0;
+            }
+            write_u16_bytes(code->data + pc + 1, (uint16_t)mapping[index]);
+        }
+        pc += size;
+    }
+    return 1;
+}
+
+static int compact_constants(emitter *e) {
+    unsigned char *used;
+    size_t *mapping;
+    float *new_constants;
+    size_t i;
+    size_t new_count = 0;
+
+    if (e->constants.count == 0) {
+        return 1;
+    }
+    used = calloc(e->constants.count, sizeof(*used));
+    mapping = malloc(e->constants.count * sizeof(*mapping));
+    if (used == NULL || mapping == NULL) {
+        free(used);
+        free(mapping);
+        set_emit_error(e, 1, 1, "out of memory while optimizing constants");
+        return 0;
+    }
+    if (!mark_section_constants(e, &e->init_code, used)
+        || !mark_section_constants(e, &e->update_code, used)
+        || !mark_section_constants(e, &e->render_code, used)) {
+        free(used);
+        free(mapping);
+        return 0;
+    }
+
+    for (i = 0; i < e->constants.count; ++i) {
+        if (used[i]) {
+            mapping[i] = new_count++;
+        }
+    }
+    if (new_count == e->constants.count) {
+        free(used);
+        free(mapping);
+        return 1;
+    }
+
+    new_constants = malloc((new_count == 0 ? 1 : new_count) * sizeof(*new_constants));
+    if (new_constants == NULL) {
+        free(used);
+        free(mapping);
+        set_emit_error(e, 1, 1, "out of memory while optimizing constants");
+        return 0;
+    }
+    for (i = 0; i < e->constants.count; ++i) {
+        if (used[i]) {
+            new_constants[mapping[i]] = e->constants.data[i];
+        }
+    }
+    if (!rewrite_section_constants(e, &e->init_code, mapping)
+        || !rewrite_section_constants(e, &e->update_code, mapping)
+        || !rewrite_section_constants(e, &e->render_code, mapping)) {
+        free(new_constants);
+        free(used);
+        free(mapping);
+        return 0;
+    }
+
+    free(e->constants.data);
+    e->constants.data = new_constants;
+    e->constants.count = new_count;
+    e->constants.capacity = new_count;
+    free(used);
+    free(mapping);
+    return 1;
+}
+
+static int instruction_stack_delta(const byte_buffer *code, size_t pc, int *out_delta) {
+    uint8_t op = code->data[pc];
+    switch (op) {
+        case LUMI_OP_PUSH_CONST_F32:
+        case LUMI_OP_LOAD_INPUT:
+        case LUMI_OP_LOAD_GLOBAL:
+        case LUMI_OP_LOAD_KEY:
+        case LUMI_OP_DUP:
+            *out_delta = 1;
+            return 1;
+        case LUMI_OP_STORE_GLOBAL:
+        case LUMI_OP_STORE_KEY:
+        case LUMI_OP_SET_COLOR:
+        case LUMI_OP_JUMP_IF_FALSE:
+            *out_delta = -1;
+            return 1;
+        case LUMI_OP_ADD:
+        case LUMI_OP_SUB:
+        case LUMI_OP_MUL:
+        case LUMI_OP_DIV:
+        case LUMI_OP_MOD:
+        case LUMI_OP_EQ:
+        case LUMI_OP_NE:
+        case LUMI_OP_LT:
+        case LUMI_OP_LE:
+        case LUMI_OP_GT:
+        case LUMI_OP_GE:
+        case LUMI_OP_AND:
+        case LUMI_OP_OR:
+            *out_delta = -1;
+            return 1;
+        case LUMI_OP_NEG:
+        case LUMI_OP_NOT:
+        case LUMI_OP_JUMP:
+        case LUMI_OP_HALT:
+            *out_delta = 0;
+            return 1;
+        case LUMI_OP_CLAMP:
+        case LUMI_OP_RGB:
+        case LUMI_OP_HSV:
+            *out_delta = -2;
+            return 1;
+        case LUMI_OP_DIST:
+            *out_delta = -3;
+            return 1;
+        case LUMI_OP_CALL_BUILTIN:
+            if (pc + 2 >= code->count) {
+                return 0;
+            }
+            *out_delta = 1 - (int)code->data[pc + 2];
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int compute_section_stack_depth(emitter *e, const byte_buffer *code, uint16_t *inout_max) {
+    int *stack_at;
+    size_t *worklist;
+    size_t work_count = 0;
+    size_t i;
+
+    if (code->count == 0) {
+        return 1;
+    }
+    stack_at = malloc(code->count * sizeof(*stack_at));
+    worklist = malloc(code->count * sizeof(*worklist));
+    if (stack_at == NULL || worklist == NULL) {
+        free(stack_at);
+        free(worklist);
+        set_emit_error(e, 1, 1, "out of memory while recomputing stack depth");
+        return 0;
+    }
+    for (i = 0; i < code->count; ++i) {
+        stack_at[i] = -1;
+    }
+    stack_at[0] = 0;
+    worklist[work_count++] = 0;
+
+#define PUSH_STACK_TARGET(target_pc, stack_value) \
+    do { \
+        size_t _target = (target_pc); \
+        int _stack = (stack_value); \
+        if (_target >= code->count) { \
+            free(stack_at); \
+            free(worklist); \
+            set_emit_error(e, 1, 1, "jump target out of range while recomputing stack depth"); \
+            return 0; \
+        } \
+        if (stack_at[_target] == -1) { \
+            stack_at[_target] = _stack; \
+            worklist[work_count++] = _target; \
+        } else if (stack_at[_target] != _stack) { \
+            free(stack_at); \
+            free(worklist); \
+            set_emit_error(e, 1, 1, "inconsistent stack depth while recomputing bytecode"); \
+            return 0; \
+        } \
+    } while (0)
+
+    while (work_count > 0) {
+        size_t pc = worklist[--work_count];
+        size_t size;
+        int delta;
+        int next_stack;
+        uint8_t op;
+        if (!bytecode_instruction_size(code, pc, &size) || !instruction_stack_delta(code, pc, &delta)) {
+            free(stack_at);
+            free(worklist);
+            set_emit_error(e, 1, 1, "invalid bytecode while recomputing stack depth");
+            return 0;
+        }
+        next_stack = stack_at[pc] + delta;
+        if (next_stack < 0 || next_stack > UINT16_MAX) {
+            free(stack_at);
+            free(worklist);
+            set_emit_error(e, 1, 1, "invalid stack depth while recomputing bytecode");
+            return 0;
+        }
+        if ((uint16_t)next_stack > *inout_max) {
+            *inout_max = (uint16_t)next_stack;
+        }
+        op = code->data[pc];
+        if (op == LUMI_OP_JUMP) {
+            PUSH_STACK_TARGET(read_u16_bytes(code->data + pc + 1), next_stack);
+        } else if (op == LUMI_OP_JUMP_IF_FALSE) {
+            PUSH_STACK_TARGET(read_u16_bytes(code->data + pc + 1), next_stack);
+            if (pc + size < code->count) {
+                PUSH_STACK_TARGET(pc + size, next_stack);
+            }
+        } else if (op != LUMI_OP_HALT && pc + size < code->count) {
+            PUSH_STACK_TARGET(pc + size, next_stack);
+        }
+    }
+#undef PUSH_STACK_TARGET
+
+    free(stack_at);
+    free(worklist);
+    return 1;
+}
+
+static int recompute_max_stack(emitter *e) {
+    uint16_t max_stack = 0;
+    if (!compute_section_stack_depth(e, &e->init_code, &max_stack)
+        || !compute_section_stack_depth(e, &e->update_code, &max_stack)
+        || !compute_section_stack_depth(e, &e->render_code, &max_stack)) {
+        return 0;
+    }
+    e->max_stack = max_stack;
+    return 1;
+}
+
+static int optimize_emitted_bytecode(emitter *e) {
+    if (!thread_jumps(e, &e->init_code)
+        || !thread_jumps(e, &e->update_code)
+        || !thread_jumps(e, &e->render_code)
+        || !remove_unreachable_code(e, &e->init_code)
+        || !remove_unreachable_code(e, &e->update_code)
+        || !remove_unreachable_code(e, &e->render_code)
+        || !optimize_noop_jumps(e, &e->init_code)
+        || !optimize_noop_jumps(e, &e->update_code)
+        || !optimize_noop_jumps(e, &e->render_code)) {
+        return 0;
+    }
+    return thread_jumps(e, &e->init_code)
+        && thread_jumps(e, &e->update_code)
+        && thread_jumps(e, &e->render_code)
+        && compact_constants(e)
+        && recompute_max_stack(e);
+}
+
+int lumi_emit_bytecode(lumi_program *program, int optimization_level, lumi_bytecode *out_bytecode, lumi_emit_error *out_error) {
     emitter e;
     size_t i;
 
@@ -1763,6 +3120,13 @@ int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode,
     memset(out_bytecode, 0, sizeof(*out_bytecode));
     memset(out_error, 0, sizeof(*out_error));
     e.error = out_error;
+    e.optimization_level = optimization_level;
+    if (e.optimization_level < 0) {
+        e.optimization_level = 0;
+    }
+    if (e.optimization_level > 3) {
+        e.optimization_level = 3;
+    }
 
     if (!program->type_seen) {
         set_emit_error(&e, 1, 1, "program type must be declared");
@@ -1783,9 +3147,14 @@ int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode,
     add_input(&e, "pressed_percentage", LUMI_INPUT_PRESS);
 
     for (i = 0; i < program->vars.count; ++i) {
-        const lumi_var_decl *var = &program->vars.items[i];
-        const_value value = eval_expr(&e, var->initializer);
+        lumi_var_decl *var = &program->vars.items[i];
+        const_value value;
         size_t j;
+        var->initializer = simplify_expr(&e, var->initializer);
+        if (e.error->message != NULL) {
+            goto fail;
+        }
+        value = eval_expr(&e, var->initializer);
         if (value.kind != CONST_FLOAT) {
             set_emit_error(&e, var->initializer->line, var->initializer->column,
                 "variable initializer for '%s' must be compile-time constant; use init/update/render for runtime setup", var->name);
@@ -1839,6 +3208,9 @@ int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode,
     }
     e.code = &e.render_code;
     if (!emit_op(&e, LUMI_OP_HALT, 0, 1, 1)) {
+        goto fail;
+    }
+    if (e.optimization_level >= 2 && !optimize_emitted_bytecode(&e)) {
         goto fail;
     }
 

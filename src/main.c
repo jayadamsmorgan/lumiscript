@@ -58,28 +58,80 @@ static int write_file(const char *path, const uint8_t *data, size_t size) {
     return 1;
 }
 
+static void print_usage(const char *program) {
+    fprintf(stderr, "usage: %s [-O[0-3]] <input.lumi> -o <output.lbc>\n", program);
+}
+
+static int parse_optimization(const char *arg, int *out_level) {
+    const char *level_text;
+    if (strcmp(arg, "-O") == 0) {
+        *out_level = 1;
+        return 1;
+    }
+    if (strncmp(arg, "-O", 2) != 0) {
+        return 0;
+    }
+    level_text = arg + 2;
+    if (level_text[0] == '=') {
+        level_text++;
+    }
+    if (level_text[0] == '\0' || level_text[1] != '\0' || level_text[0] < '0' || level_text[0] > '3') {
+        return 0;
+    }
+    *out_level = level_text[0] - '0';
+    return 1;
+}
+
 int main(int argc, char **argv) {
     const char *input_path;
     const char *output_path;
     char *source;
     lumi_compile_result result;
+    lumi_compile_options options;
     uint8_t *data;
     size_t data_size;
+    int i;
 
-    if (argc != 4 || strcmp(argv[2], "-o") != 0) {
-        fprintf(stderr, "usage: %s <input.lumi> -o <output.lbc>\n", argv[0]);
+    input_path = NULL;
+    output_path = NULL;
+    options.optimization_level = 0;
+
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 >= argc || output_path != NULL) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            output_path = argv[++i];
+        } else if (strncmp(argv[i], "-O", 2) == 0) {
+            if (!parse_optimization(argv[i], &options.optimization_level)) {
+                fprintf(stderr, "invalid optimization level: %s\n", argv[i]);
+                return 1;
+            }
+        } else if (argv[i][0] != '-') {
+            if (input_path != NULL) {
+                print_usage(argv[0]);
+                return 1;
+            }
+            input_path = argv[i];
+        } else {
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+
+    if (input_path == NULL || output_path == NULL) {
+        print_usage(argv[0]);
         return 1;
     }
 
-    input_path = argv[1];
-    output_path = argv[3];
     source = read_file(input_path, NULL);
     if (source == NULL) {
         fprintf(stderr, "failed to read %s\n", input_path);
         return 1;
     }
 
-    if (!lumi_compile_source(source, &result)) {
+    if (!lumi_compile_source_with_options(source, &options, &result)) {
         fprintf(stderr, "%zu:%zu: %s\n", result.error_line, result.error_column, result.error_message);
         free(source);
         lumi_compile_result_free(&result);

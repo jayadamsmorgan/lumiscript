@@ -1,0 +1,18 @@
+type static
+
+global var scratch = 0
+
+render {
+    if pressed {
+    } else {
+    }
+
+    scratch = dist(x, y, 0, 0) * 0
+    scratch = 7
+
+    color rgb(
+        x + dist(x, y, 0, 0) * 0,
+        rand() * 0 + round(rand() * 255),
+        if 1 { 32 + (0 && dist(x, y, 0, 0)) } else { rand() * 255 }
+    )
+}

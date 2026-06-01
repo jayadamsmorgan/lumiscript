@@ -89,6 +89,11 @@ After the header:
 - `JUMP_IF_FALSE`
 - `SET_COLOR`
 - `HALT`
+- `CLAMP`
+- `DIST`
+- `RGB`
+- `HSV`
+- `DUP`
 
 ## Operand Widths
 
@@ -101,6 +106,11 @@ After the header:
 - `CALL_BUILTIN`: opcode + `uint8_t builtin_id` + `uint8_t arg_count`
 - `JUMP`: opcode + `uint16_t target_pc`
 - `JUMP_IF_FALSE`: opcode + `uint16_t target_pc`
+- `CLAMP`: opcode only, consumes `x`, `lo`, `hi`, pushes clamped result
+- `DIST`: opcode only, consumes `x1`, `y1`, `x2`, `y2`, pushes distance
+- `RGB`: opcode only, consumes `r`, `g`, `b`, pushes packed color
+- `HSV`: opcode only, consumes `h`, `s`, `v`, pushes packed color
+- `DUP`: opcode only, duplicates the top stack cell
 
 Jump targets are absolute byte offsets within the current section.
 

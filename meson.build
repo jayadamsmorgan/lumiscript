@@ -157,6 +157,12 @@ test(
 )
 
 test(
+  'compile-optimized-bytecode',
+  find_program('tests/compile_optimization.sh'),
+  args: [meson.project_source_root(), meson.project_build_root()],
+)
+
+test(
   'run-static-vm',
   find_program('tests/compile_and_run_vm.sh'),
   args: [meson.project_source_root(), meson.project_build_root(), 'examples/example-static.lumi', 'vm-static.lbc', 'tests/vm-static-input.txt', 'tests/vm-static-expected.txt'],

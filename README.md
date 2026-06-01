@@ -105,6 +105,14 @@ Compiles a Lumi source file into serialized bytecode.
 ./build/lumic input.lumi -o output.lbc
 ```
 
+Use `-O`, `-O0`, `-O1`, `-O2`, or `-O3` to choose an optimization level:
+
+```bash
+./build/lumic -O2 input.lumi -o output.lbc
+```
+
+Higher levels enable constant folding, expression simplification, bytecode cleanup, dedicated builtin opcodes, and conservative common-subexpression elimination.
+
 ### `lumivm`
 
 Loads bytecode into fixed-capacity host buffers, checks whether it fits, then executes commands from stdin.

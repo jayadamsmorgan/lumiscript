@@ -5,12 +5,27 @@
 #include <string.h>
 
 int lumi_compile_source(const char *source, lumi_compile_result *out_result) {
+    lumi_compile_options options = {0};
+    return lumi_compile_source_with_options(source, &options, out_result);
+}
+
+int lumi_compile_source_with_options(const char *source, const lumi_compile_options *options, lumi_compile_result *out_result) {
     lumi_program program;
     lumi_parse_error parse_error;
     lumi_emit_error emit_error;
+    int optimization_level = 0;
 
     if (source == NULL || out_result == NULL) {
         return 0;
+    }
+    if (options != NULL) {
+        optimization_level = options->optimization_level;
+        if (optimization_level < 0) {
+            optimization_level = 0;
+        }
+        if (optimization_level > 3) {
+            optimization_level = 3;
+        }
     }
 
     memset(out_result, 0, sizeof(*out_result));
@@ -25,7 +40,7 @@ int lumi_compile_source(const char *source, lumi_compile_result *out_result) {
         return 0;
     }
 
-    if (!lumi_emit_bytecode(&program, &out_result->bytecode, &emit_error)) {
+    if (!lumi_emit_bytecode(&program, optimization_level, &out_result->bytecode, &emit_error)) {
         out_result->error_message = emit_error.message;
         out_result->error_line = emit_error.line;
         out_result->error_column = emit_error.column;

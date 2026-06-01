@@ -1,0 +1,11 @@
+type animation
+
+global var scratch = 0
+
+update {
+    scratch = ((dt + speed) * (dt + speed)) + ((dt + speed) * (dt + speed))
+}
+
+render {
+    color 0
+}

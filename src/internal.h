@@ -209,6 +209,6 @@ typedef struct lumi_emit_error {
     size_t column;
 } lumi_emit_error;
 
-int lumi_emit_bytecode(const lumi_program *program, lumi_bytecode *out_bytecode, lumi_emit_error *out_error);
+int lumi_emit_bytecode(lumi_program *program, int optimization_level, lumi_bytecode *out_bytecode, lumi_emit_error *out_error);
 
 #endif
