@@ -1,0 +1,5 @@
+type static
+
+render {
+    color rgb(floor(x), ceil(y), round(dt * 0.1))
+}

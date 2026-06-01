@@ -1,0 +1,11 @@
+type animation
+
+global var sparkle = 0
+
+update {
+    sparkle = rand() * 255
+}
+
+render {
+    color rgb(sparkle, sparkle, 255)
+}

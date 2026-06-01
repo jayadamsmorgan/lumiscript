@@ -25,6 +25,11 @@ The VM keeps two persistent state spaces:
 
 The compiler emits initial float values for both spaces.
 
+`rand()` calls the random provider installed on the VM state with `lumi_vm_set_random`.
+The provider must return a float in `[0, 1)`.
+If no provider is installed, `rand()` returns `0`.
+The host `lumivm` tool installs a deterministic C `srand`/`rand` provider; embedded runtimes can use platform-specific RNGs instead.
+
 ## Value Model
 
 - scalar cells are 32-bit values
@@ -137,11 +142,15 @@ Current builtin functions:
 - `sin`
 - `cos`
 - `sqrt`
+- `ceil`
+- `floor`
+- `round`
 - `clamp`
 - `dist`
 - `lerp`
 - `min`
 - `max`
 - `pow`
+- `rand`
 - `rgb`
 - `hsv`

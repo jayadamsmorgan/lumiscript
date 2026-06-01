@@ -71,6 +71,8 @@ typedef struct lumi_vm_state {
     size_t key_slots;
     uint32_t *stack;
     size_t stack_capacity;
+    float (*random_fn)(void *user_data);
+    void *random_user_data;
 } lumi_vm_state;
 
 typedef struct lumi_vm_inputs {
@@ -96,6 +98,7 @@ int lumi_vm_load_program(const uint8_t *data, size_t data_size, const lumi_vm_pr
 int lumi_vm_init_state(const lumi_vm_program *program, const lumi_vm_state_storage *storage,
     size_t key_slots, lumi_vm_state *out_state, lumi_vm_error *out_error);
 void lumi_vm_reset_state(const lumi_vm_program *program, lumi_vm_state *state);
+void lumi_vm_set_random(lumi_vm_state *state, float (*random_fn)(void *user_data), void *user_data);
 int lumi_vm_run_init(const lumi_vm_program *program, lumi_vm_state *state, lumi_vm_output *out_output, lumi_vm_error *out_error);
 int lumi_vm_run_update(const lumi_vm_program *program, lumi_vm_state *state, const lumi_vm_inputs *inputs,
     lumi_vm_output *out_output, lumi_vm_error *out_error);

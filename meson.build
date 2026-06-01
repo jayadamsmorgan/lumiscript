@@ -103,6 +103,18 @@ test(
 )
 
 test(
+  'compile-rand-example',
+  find_program('tests/compile_example.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-rand.lumi', 'rand.lbc'],
+)
+
+test(
+  'compile-rounding-example',
+  find_program('tests/compile_example.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-rounding.lumi', 'rounding.lbc'],
+)
+
+test(
   'lsp-smoke',
   find_program('tests/lsp_smoke.sh'),
   args: [meson.project_build_root()],
@@ -194,6 +206,18 @@ test(
   'run-array-vm',
   find_program('tests/compile_and_run_vm.sh'),
   args: [meson.project_source_root(), meson.project_build_root(), 'example-array.lumi', 'vm-array.lbc', 'tests/vm-array-input.txt', 'tests/vm-array-expected.txt'],
+)
+
+test(
+  'run-rand-vm',
+  find_program('tests/compile_and_run_vm.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-rand.lumi', 'vm-rand.lbc', 'tests/vm-rand-input.txt', 'tests/vm-rand-expected.txt'],
+)
+
+test(
+  'run-rounding-vm',
+  find_program('tests/compile_and_run_vm.sh'),
+  args: [meson.project_source_root(), meson.project_build_root(), 'example-rounding.lumi', 'vm-rounding.lbc', 'tests/vm-rounding-input.txt', 'tests/vm-rounding-expected.txt'],
 )
 
 test(

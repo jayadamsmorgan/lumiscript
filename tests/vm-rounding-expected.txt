@@ -1,0 +1,2 @@
+init steps=1
+render key=0 color=0x0C0D0D steps=11

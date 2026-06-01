@@ -210,12 +210,16 @@ color if pressed {
 - `sin(x)`
 - `cos(x)`
 - `sqrt(x)`
+- `ceil(x)`
+- `floor(x)`
+- `round(x)`
 - `clamp(x, lo, hi)`
 - `dist(x1, y1, x2, y2)`
 - `lerp(a, b, t)`
 - `min(a, b)`
 - `max(a, b)`
 - `pow(x, y)`
+- `rand()`: pseudo-random float in `[0, 1)`, provided by the VM implementation
 - `rgb(r, g, b)`
 - `hsv(h, s, v)`
 

@@ -1,0 +1,5 @@
+init
+update 16 1
+render 0 0 0 16 1 0 0
+update 16 1
+render 0 0 0 16 1 0 0

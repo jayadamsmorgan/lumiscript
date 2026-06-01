@@ -1218,6 +1218,15 @@ static const_value eval_call(emitter *e, const lumi_expr *expr) {
         }
         out.kind = CONST_FLOAT;
         out.number = sqrtf(args[0].number);
+    } else if (strcmp(expr->as.call.name, "ceil") == 0 && expr->as.call.arg_count == 1) {
+        out.kind = CONST_FLOAT;
+        out.number = ceilf(args[0].number);
+    } else if (strcmp(expr->as.call.name, "floor") == 0 && expr->as.call.arg_count == 1) {
+        out.kind = CONST_FLOAT;
+        out.number = floorf(args[0].number);
+    } else if (strcmp(expr->as.call.name, "round") == 0 && expr->as.call.arg_count == 1) {
+        out.kind = CONST_FLOAT;
+        out.number = roundf(args[0].number);
     } else if (strcmp(expr->as.call.name, "clamp") == 0 && expr->as.call.arg_count == 3) {
         float v = args[0].number;
         if (v < args[1].number) {
@@ -1344,6 +1353,15 @@ static int emit_builtin(emitter *e, const lumi_expr *expr) {
     } else if (strcmp(expr->as.call.name, "sqrt") == 0) {
         builtin = LUMI_BUILTIN_SQRT;
         expected = 1;
+    } else if (strcmp(expr->as.call.name, "ceil") == 0) {
+        builtin = LUMI_BUILTIN_CEIL;
+        expected = 1;
+    } else if (strcmp(expr->as.call.name, "floor") == 0) {
+        builtin = LUMI_BUILTIN_FLOOR;
+        expected = 1;
+    } else if (strcmp(expr->as.call.name, "round") == 0) {
+        builtin = LUMI_BUILTIN_ROUND;
+        expected = 1;
     } else if (strcmp(expr->as.call.name, "clamp") == 0) {
         builtin = LUMI_BUILTIN_CLAMP;
         expected = 3;
@@ -1362,6 +1380,9 @@ static int emit_builtin(emitter *e, const lumi_expr *expr) {
     } else if (strcmp(expr->as.call.name, "pow") == 0) {
         builtin = LUMI_BUILTIN_POW;
         expected = 2;
+    } else if (strcmp(expr->as.call.name, "rand") == 0) {
+        builtin = LUMI_BUILTIN_RAND;
+        expected = 0;
     } else if (strcmp(expr->as.call.name, "rgb") == 0) {
         builtin = LUMI_BUILTIN_RGB;
         expected = 3;

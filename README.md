@@ -24,7 +24,7 @@ The compiler is free to allocate memory on the host, while the VM is designed ar
 * **Three-Stage Execution Model:** Separate one-time initialization, per-update shared logic, and per-key rendering logic.
 * **Persistent State:** Supports both shared `global var` state and per-key `key var` state.
 * **Compile-Time Folding:** Constant `let` expressions and constant-capable builtin calls are folded by the compiler when possible.
-* **Math + Color Builtins:** Includes helpers such as `sin`, `cos`, `sqrt`, `lerp`, `dist`, `rgb`, and `hsv`.
+* **Math + Color Builtins:** Includes helpers such as `sin`, `cos`, `sqrt`, `ceil`, `floor`, `round`, `lerp`, `dist`, `rand`, `rgb`, and `hsv`.
 * **Golden Bytecode Tests:** The project checks not only that scripts compile and run, but also that serialized bytecode matches expected output for selected cases.
 
 > [!IMPORTANT]
@@ -93,7 +93,7 @@ Supported concepts include:
 * assignments
 * statement and expression `if`
 * float-based arithmetic and boolean semantics
-* builtins such as `abs`, `sin`, `cos`, `sqrt`, `clamp`, `dist`, `lerp`, `min`, `max`, `pow`, `rgb`, and `hsv`
+* builtins such as `abs`, `sin`, `cos`, `sqrt`, `ceil`, `floor`, `round`, `clamp`, `dist`, `lerp`, `min`, `max`, `pow`, `rand`, `rgb`, and `hsv`
 
 ## Tools
 

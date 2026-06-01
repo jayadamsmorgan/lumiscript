@@ -10,11 +10,17 @@
 #define HOST_KEY_SLOTS 16
 #define HOST_CODE_CAPACITY 4096
 #define HOST_STACK_CAPACITY 128
+#define HOST_RANDOM_SEED 0x4C554D49u
 
 typedef union host_cell {
     uint32_t u32;
     float f32;
 } host_cell;
+
+static float host_rand(void *user_data) {
+    (void)user_data;
+    return (float)rand() / ((float)RAND_MAX + 1.0f);
+}
 
 static int size_mul_overflow(size_t a, size_t b, size_t *out) {
     if (a != 0 && b > ((size_t)-1) / a) {
@@ -181,6 +187,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "state init failed: %s (%zu)\n", error.message, error.detail);
         goto fail;
     }
+    srand(HOST_RANDOM_SEED);
+    lumi_vm_set_random(&state, host_rand, NULL);
 
     while (fgets(line, sizeof(line), stdin) != NULL) {
         lumi_vm_output output;
@@ -189,6 +197,7 @@ int main(int argc, char **argv) {
         }
         if (strncmp(line, "reset", 5) == 0) {
             lumi_vm_reset_state(&program, &state);
+            srand(HOST_RANDOM_SEED);
             printf("reset\n");
             continue;
         }

@@ -312,6 +312,8 @@ int lumi_vm_init_state(const lumi_vm_program *program, const lumi_vm_state_stora
     out_state->key_slots = key_slots;
     out_state->stack = storage->stack;
     out_state->stack_capacity = storage->stack_capacity;
+    out_state->random_fn = NULL;
+    out_state->random_user_data = NULL;
     lumi_vm_reset_state(program, out_state);
     set_error(out_error, NULL, 0);
     return 1;
@@ -332,6 +334,14 @@ void lumi_vm_reset_state(const lumi_vm_program *program, lumi_vm_state *state) {
             state->keys[key * program->key_count + i] = cell.u32;
         }
     }
+}
+
+void lumi_vm_set_random(lumi_vm_state *state, float (*random_fn)(void *user_data), void *user_data) {
+    if (state == NULL) {
+        return;
+    }
+    state->random_fn = random_fn;
+    state->random_user_data = user_data;
 }
 
 static int push(lumi_cell *stack, size_t *sp, size_t capacity, lumi_cell value, lumi_vm_error *error) {
@@ -531,6 +541,15 @@ static int execute_section(const lumi_vm_program *program, lumi_vm_state *state,
                         }
                         result.f32 = sqrtf(args[0].f32);
                         break;
+                    case LUMI_BUILTIN_CEIL:
+                        result.f32 = ceilf(args[0].f32);
+                        break;
+                    case LUMI_BUILTIN_FLOOR:
+                        result.f32 = floorf(args[0].f32);
+                        break;
+                    case LUMI_BUILTIN_ROUND:
+                        result.f32 = roundf(args[0].f32);
+                        break;
                     case LUMI_BUILTIN_CLAMP:
                         result.f32 = args[0].f32;
                         if (result.f32 < args[1].f32) {
@@ -557,6 +576,9 @@ static int execute_section(const lumi_vm_program *program, lumi_vm_state *state,
                         break;
                     case LUMI_BUILTIN_POW:
                         result.f32 = powf(args[0].f32, args[1].f32);
+                        break;
+                    case LUMI_BUILTIN_RAND:
+                        result.f32 = state->random_fn == NULL ? 0.0f : state->random_fn(state->random_user_data);
                         break;
                     case LUMI_BUILTIN_RGB: result.u32 = pack_rgb(args[0].f32, args[1].f32, args[2].f32); break;
                     case LUMI_BUILTIN_HSV: result.u32 = hsv_to_rgb(args[0].f32, args[1].f32, args[2].f32); break;

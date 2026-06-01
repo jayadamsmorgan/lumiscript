@@ -61,6 +61,10 @@ typedef enum lumi_builtin_id {
     LUMI_BUILTIN_MIN,
     LUMI_BUILTIN_MAX,
     LUMI_BUILTIN_POW,
+    LUMI_BUILTIN_RAND,
+    LUMI_BUILTIN_CEIL,
+    LUMI_BUILTIN_FLOOR,
+    LUMI_BUILTIN_ROUND,
 } lumi_builtin_id;
 
 typedef struct lumi_bytecode {
